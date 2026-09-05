@@ -135,3 +135,7 @@ csc.*
 
 # Thry Editor (Poiyomi)
 Thry
+
+# Poiyomi
+/[Aa]ssets/_PoiyomiShaders*
+/[Aa]ssets/_PoiyomiShaders/*
