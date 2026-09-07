@@ -21,8 +21,8 @@ MonoBehaviour:
   BasisMetaEncryptedExtension: .BEM
   BasisEncryptedExtension: .BEE
   ProtectedPasswordFileName: dontuploadmepassword
-  UserSelectedPassword: 
-  UseCustomPassword: 0
+  UserSelectedPassword: 0a4a0cac44cf9178aa27a4493bb3ab95f8e645e48c3cf35eec06961c9bbae12e
+  UseCustomPassword: 1
   useCompression: 1
   GenerateImage: 1
   OpenFolderOnDisc: 1
