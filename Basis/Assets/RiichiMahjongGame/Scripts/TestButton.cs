@@ -21,9 +21,17 @@ namespace hetarikia.Mahjong
 		void Start()
 		{
 			networkShim = SafeUtil.MakeNetworkable(this);
+			Debug.Log(networkShim);
 			networkShim.NetworkMessageReceived = OnNetworkMessage;
-			shuffleButton = GetComponent<BasisInteractableButton>();
-			shuffleButton.OnInteractStartEvent.AddListener(OnButtonClick);
+			if (
+				TryGetComponent<BasisInteractableButton>(
+					out BasisInteractableButton button
+				)
+			)
+			{
+				shuffleButton = button;
+				shuffleButton.OnInteractStartEvent.AddListener(OnButtonClick);
+			}
 		}
 
 		private void OnButtonClick(BasisInput input)
