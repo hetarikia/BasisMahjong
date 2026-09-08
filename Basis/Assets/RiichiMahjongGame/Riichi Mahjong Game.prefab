@@ -51,7 +51,7 @@ MonoBehaviour:
   BasisBundleDescription:
     AssetBundleName: Riichi Mahjong Game
     AssetBundleDescription: A riichi mahjong game prop!
-    AssetBundleIcon: {fileID: 0}
+    AssetBundleIcon: {fileID: 2800000, guid: efd073a38edb81f46ac249947130e217, type: 3}
     Tags: []
     ContentGroupId: 2bb86b8b23e44bbb91e4aaa6443fb75f20260824
   SpawnMetaData:
@@ -260,10 +260,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 45c49a9b617c09f4dab44d7a313fe9c1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TestButton
-  HasNetworkID: 0
-  IsOwnedLocallyOnServer: 0
-  IsOwnedLocallyOnClient: 0
-  CurrentOwnerId: 0
   tiles: {fileID: 8862315775804394654}
 --- !u!1001 &3134924540548009040
 PrefabInstance:
