@@ -3,49 +3,65 @@ using Basis;
 using Basis.Network.Core;
 using Basis.Scripts.BasisSdk.Interactions;
 using Basis.Scripts.Device_Management.Devices;
+using Basis.Scripts.Networking.Sync;
+using Basis.Shims;
 using Unity.XR.CoreUtils;
 using UnityEngine;
 
 namespace hetarikia.Mahjong
 {
 	[Cilboxable]
-	[RequireComponent(typeof(BasisInteractableButton))]
 	public class TestButton : MonoBehaviour
 	{
 		[SerializeField]
-		private Transform tiles;
+		private Transform tilesParent;
+
+		[SerializeField]
+		private Transform dummyTilesParent;
+
+		[SerializeField]
 		private BasisInteractableButton shuffleButton;
+
+		private BasisTransformSyncShim basisTransformSyncShim;
 		private BasisNetworkShim networkShim;
 		private int counter = 0;
+		private Transform[] tiles;
 
 		void Start()
 		{
 			networkShim = SafeUtil.MakeNetworkable(this);
-			Debug.Log(networkShim);
 			networkShim.NetworkMessageReceived = OnNetworkMessage;
-			if (
-				TryGetComponent<BasisInteractableButton>(
-					out BasisInteractableButton button
-				)
-			)
-			{
-				shuffleButton = button;
-				shuffleButton.OnInteractStartEvent.AddListener(OnButtonClick);
-			}
+			basisTransformSyncShim = new BasisTransformSyncShim();
+			basisTransformSyncShim.Channels = BasisTransformSyncShim.ChannelPose;
+			shuffleButton.OnInteractStartEvent.AddListener(OnButtonClick);
+			tiles = tilesParent.GetComponentsInChildren<Transform>();
 		}
 
 		private void OnButtonClick(BasisInput input)
 		{
-			Debug.Log("shuffle button clicked");
 			networkShim.TakeOwnership();
+			Vector3[] newDummyTilePositions = new Vector3[dummyTilesParent.childCount];
 			// TODO Add if to check if owner before running below
-			for (int i = tiles.childCount - 1; i >= 1; i--)
+			for (int i = dummyTilesParent.childCount - 1; i >= 1; i--)
 			{
-				Transform randomTile = tiles.GetChild(UnityEngine.Random.Range(0, i));
-				Vector3 tempTilePosition = tiles.GetChild(i).position;
-				tiles.GetChild(i).position = randomTile.position;
+				Transform currentTile = dummyTilesParent.GetChild(i);
+				Transform randomTile = dummyTilesParent.GetChild(
+					UnityEngine.Random.Range(0, i)
+				);
+				Vector3 tempTilePosition = currentTile.position;
+
+				currentTile.position = randomTile.position;
 				randomTile.position = tempTilePosition;
+				newDummyTilePositions[i] = currentTile.position;
 			}
+			newDummyTilePositions[0] = dummyTilesParent.GetChild(0).position;
+			BasisTransformSyncShim.SetValues(
+				tiles,
+				BasisTransformSyncShim.SpaceWorld,
+				newDummyTilePositions,
+				null,
+				null
+			);
 			counter++;
 			networkShim.SendCustomNetworkEvent(
 				BitConverter.GetBytes(counter),
