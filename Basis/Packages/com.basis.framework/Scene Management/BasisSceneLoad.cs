@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.Scripts.BasisSdk.Players;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,7 +8,8 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.SceneManagement;
 namespace Basis.Scripts.Drivers
 {
-    public static class BasisSceneLoad
+    [AutoStaticsCleanup]
+    public static partial class BasisSceneLoad
     {
         public static BasisProgressReport progressCallback = new BasisProgressReport();
         /// <summary>
@@ -25,20 +27,25 @@ namespace Basis.Scripts.Drivers
             AsyncOperationHandle<SceneInstance> handle = Addressables.LoadSceneAsync(sceneToLoad, mode, activateOnLoad: true, priority: 100, SceneReleaseMode.ReleaseSceneWhenSceneUnloaded);
 
             progressCallback.ReportProgress(UUID, 0f, $"Preparing scene {sceneToLoad}");
-
-            while (!handle.IsDone)
+            try
             {
-                DownloadStatus dl = handle.GetDownloadStatus();
-                float percent = handle.PercentComplete * 100f;
-                string stage = (dl.TotalBytes > 0 && dl.DownloadedBytes < dl.TotalBytes)
-                    ? $"Downloading {sceneToLoad}: {FormatBytes(dl.DownloadedBytes)} / {FormatBytes(dl.TotalBytes)}"
-                    : $"Activating scene {sceneToLoad}";
-                progressCallback.ReportProgress(UUID, percent, stage);
-                await Task.Yield();
-            }
+                while (!handle.IsDone)
+                {
+                    DownloadStatus dl = handle.GetDownloadStatus();
+                    float percent = System.Math.Min(handle.PercentComplete * 100f, 99f);
+                    string stage = (dl.TotalBytes > 0 && dl.DownloadedBytes < dl.TotalBytes)
+                        ? $"Downloading {sceneToLoad}: {FormatBytes(dl.DownloadedBytes)} / {FormatBytes(dl.TotalBytes)}"
+                        : $"Activating scene {sceneToLoad}";
+                    progressCallback.ReportProgress(UUID, percent, stage);
+                    await Task.Yield();
+                }
 
-            await handle.Task;
-            progressCallback.ReportProgress(UUID, 100f, $"Loaded scene {sceneToLoad}");
+                await handle.Task;
+            }
+            finally
+            {
+                progressCallback.ReportProgress(UUID, 100f, $"Loaded scene {sceneToLoad}");
+            }
             BasisDebug.Log($"Loaded Scene {sceneToLoad}", BasisDebug.LogTag.Event);
         }
 
@@ -58,11 +65,16 @@ namespace Basis.Scripts.Drivers
         /// remote but can be used local.
         /// </summary>
         /// <returns></returns>
-        public static async Task<Scene> LoadSceneAssetBundle(BasisLoadableBundle BasisLoadableBundle, bool SpawnPlayerOnSceneLoad = true, bool MakeSceneActiveScene = true)
+        public static Task<Scene> LoadSceneAssetBundle(BasisLoadableBundle BasisLoadableBundle, bool SpawnPlayerOnSceneLoad = true, bool MakeSceneActiveScene = true)
+        {
+            return LoadSceneAssetBundle(BasisLoadableBundle, progressCallback, CancellationToken.None, SpawnPlayerOnSceneLoad, MakeSceneActiveScene);
+        }
+
+        public static async Task<Scene> LoadSceneAssetBundle(BasisLoadableBundle BasisLoadableBundle, BasisProgressReport report, CancellationToken cancellationToken, bool SpawnPlayerOnSceneLoad = true, bool MakeSceneActiveScene = true)
         {
             SetIfPlayerShouldSpawnOnSceneLoad(SpawnPlayerOnSceneLoad);
             BasisDebug.Log("Loading Scene ", BasisDebug.LogTag.Scene);
-            Scene Scene = await BasisLoadHandler.LoadSceneBundle(MakeSceneActiveScene, BasisLoadableBundle, progressCallback, new CancellationToken());
+            Scene Scene = await BasisLoadHandler.LoadSceneBundle(MakeSceneActiveScene, BasisLoadableBundle, report, cancellationToken);
             BasisDebug.Log("Loaded Scene ", BasisDebug.LogTag.Scene);
             return Scene;
         }

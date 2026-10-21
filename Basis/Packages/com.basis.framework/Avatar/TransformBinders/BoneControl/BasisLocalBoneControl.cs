@@ -1,4 +1,5 @@
-﻿using Basis.Scripts.Common;
+﻿using Unity.Scripting.LifecycleManagement;
+using Basis.Scripts.Common;
 using Basis.Scripts.Drivers;
 using System;
 using System.Collections.Generic;
@@ -7,8 +8,9 @@ using UnityEngine;
 
 namespace Basis.Scripts.TransformBinders.BoneControl
 {
+    [AutoStaticsCleanup]
     [Serializable]
-    public class BasisLocalBoneControl
+    public partial class BasisLocalBoneControl
     {
         public const float AngleBeforeSpeedup = 25f;
 
@@ -42,6 +44,8 @@ namespace Basis.Scripts.TransformBinders.BoneControl
 
         public List<string> DevicesWithRoles = new List<string>();
 
+        public bool TrackerFollowsBody;
+
         public Action<bool> OnHasRigChanged;
 
         [SerializeField] private BasisHasRigLayer hasRigLayer = BasisHasRigLayer.HasNoRigLayer;
@@ -59,7 +63,7 @@ namespace Basis.Scripts.TransformBinders.BoneControl
         // a live Owner and its old Index, and every accessor below indexes the store by raw pointer
         // — no bounds check in any build. The capacity test is one compare next to two null tests
         // already on this path.
-        private unsafe bool HasStore => Owner != null && Owner.simInputPtr != null && Owner.simStatePtr != null
+        internal unsafe bool HasStore => Owner != null && Owner.simInputPtr != null && Owner.simStatePtr != null
             && (uint)Index < (uint)Owner.nativeCapacity;
 
         public unsafe BasisCalibratedCoords IncomingData

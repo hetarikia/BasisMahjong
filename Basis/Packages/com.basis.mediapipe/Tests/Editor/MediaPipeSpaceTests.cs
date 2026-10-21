@@ -103,7 +103,7 @@ namespace Basis.MediaPipe.Tests
             new BasisMediaPipeResult { HasPose = true, PoseWorldLandmarks = pose };
 
         private static MediaPipeBodyConverter Converter(float strength = 1f) =>
-            new MediaPipeBodyConverter { Smoothing = 0f, Strength = strength };
+            new MediaPipeBodyConverter { Strength = strength };
 
         private static Vector3[] Turned(Quaternion by)
         {
@@ -123,7 +123,7 @@ namespace Basis.MediaPipe.Tests
             BasisMediaPipeResult moved = Result(Turned(by));
 
             converter.Calibrate(rest);
-            Assert.IsTrue(converter.TryGetTorsoOffset(in moved, in Timing, out Quaternion offset));
+            Assert.IsTrue(converter.TryGetTorsoOffset(in moved, in Timing, out Quaternion offset, out _));
 
             Vector3 euler = offset.eulerAngles;
             return new Vector3(Signed(euler.x), Signed(euler.y), Signed(euler.z));
@@ -148,7 +148,7 @@ namespace Basis.MediaPipe.Tests
             BasisMediaPipeResult neutral = Result(MediaPipeArmRetargetTests.ArmDown());
 
             converter.Calibrate(neutral);
-            Assert.IsTrue(converter.TryGetTorsoOffset(in neutral, in Timing, out Quaternion offset));
+            Assert.IsTrue(converter.TryGetTorsoOffset(in neutral, in Timing, out Quaternion offset, out _));
 
             Assert.Less(Quaternion.Angle(offset, Quaternion.identity), 0.1f,
                 "sitting in the calibration pose must leave the chest exactly where the body puts it");
@@ -268,7 +268,7 @@ namespace Basis.MediaPipe.Tests
                 RightHandWorldLandmarks = Hand(UserBodyFrame() * handInBody),
             };
 
-            MediaPipeHandConverter converter = new MediaPipeHandConverter { UseRotation = true, PoseSmoothing = 0f };
+            MediaPipeHandConverter converter = new MediaPipeHandConverter { UseRotation = true };
             MediaPipeHandConverter.AvatarHandRig rig = Rig();
 
             Assert.IsTrue(converter.TryGetHandRotation(in result, in rig, false, new MediaPipeTiming(1f / 60f, 1f / 15f, true), out Quaternion rotation));

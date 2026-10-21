@@ -364,7 +364,7 @@ public class BasisPickupSyncNetworking : BasisSyncedTransform, IBasisStaticLocka
     {
         handId = HandNone;
         frame = default;
-        if (!AttachToHandOnGrab || !_attachId.IsValid || !IsOwnedLocallyOnClient || BasisPickupInteractable == null) return false;
+        if (!AttachToHandOnGrab || !_attachId.IsValid || !IsOwnedLocallyOnClient || BasisPickupInteractable == null || !BasisPickupInteractable.HoldFollowsHand) return false;
 
         BasisInputSources inputs = BasisPickupInteractable.Inputs;
         BasisBoneTrackedRole role;
@@ -717,12 +717,19 @@ public class BasisPickupSyncNetworking : BasisSyncedTransform, IBasisStaticLocka
 
         if (IsOwnedLocallyOnClient)
         {
+            // Held by a pickup that controls the kinematic state while held - preserve it
+            bool heldKinematic = BasisPickupInteractable != null
+                && BasisPickupInteractable.HoldControlsKinematic
+                && BasisPickupInteractable.RequiresUpdateLoop;
             if (pendingStealRequest != null)
             {
-                SetIsKinematicOnPickup(_authoredKinematic);
+                if (!heldKinematic)
+                {
+                    SetIsKinematicOnPickup(_authoredKinematic);
+                }
                 if (BasisPickupInteractable != null)
                 {
-                    if (BasisPickupInteractable.KinematicWhileInteracting)
+                    if (BasisPickupInteractable.HoldControlsKinematic)
                     {
                         BasisPickupInteractable._previousKinematicValue = _authoredKinematic;
                     }
@@ -733,13 +740,7 @@ public class BasisPickupSyncNetworking : BasisSyncedTransform, IBasisStaticLocka
                 }
                 pendingStealRequest = null;
             }
-            else if (BasisPickupInteractable != null
-                && BasisPickupInteractable.KinematicWhileInteracting
-                && BasisPickupInteractable.RequiresUpdateLoop)
-            {
-                // Held with KinematicWhileInteracting - preserve kinematic state
-            }
-            else
+            else if (!heldKinematic)
             {
                 SetIsKinematicOnPickup(_authoredKinematic);
             }

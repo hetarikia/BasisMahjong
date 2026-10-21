@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.Network.Core;
 using Basis.Scripts.Audio;
 using Basis.Scripts.BasisSdk.Players;
@@ -15,7 +16,8 @@ using static SerializableBasis;
 /// Client-side handler for sending and receiving chat text messages over the dedicated ChatChannel.
 /// Chat text is displayed above the remote player's nameplate.
 /// </summary>
-public static class BasisNetworkHandleChat
+[AutoStaticsCleanup]
+public static partial class BasisNetworkHandleChat
 {
     /// <summary>
     /// Maximum chat message length in characters to prevent abuse.
@@ -24,8 +26,9 @@ public static class BasisNetworkHandleChat
 
     /// <summary>
     /// How long a chat message stays visible (in seconds) before auto-clearing.
+    /// User-configurable via Settings > Chat > Chat Message Duration.
     /// </summary>
-    public const float MessageDisplayDuration = 11f;
+    public static float MessageDisplayDuration => Basis.BasisUI.BasisSettingsDefaults.ChatMessageDuration.RawValue;
 
 
     /// <summary>
@@ -34,7 +37,7 @@ public static class BasisNetworkHandleChat
     /// </summary>
     public static event Action<ushort, string> OnChatMessageReceived;
 
-    private static readonly ThreadLocal<NetDataWriter> threadLocalWriter = new ThreadLocal<NetDataWriter>(() => new NetDataWriter());
+    [NoAutoStaticsCleanup] private static readonly ThreadLocal<NetDataWriter> threadLocalWriter = new ThreadLocal<NetDataWriter>(() => new NetDataWriter());
 
     [RuntimeInitializeOnLoadMethod]
     private static void Init()
@@ -230,6 +233,7 @@ public static class BasisNetworkHandleChat
                 return;
             }
 
+            remotePlayer.ChatHistory.Add(message, DateTime.UtcNow);
             remotePlayer.OnChatMessageReceived?.Invoke(message);
 
             if (!string.IsNullOrEmpty(message) && playNotificationSound)

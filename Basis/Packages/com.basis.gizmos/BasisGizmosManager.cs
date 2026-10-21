@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -14,7 +15,8 @@ using UnityEngine.Rendering;
 /// bounds the TMP re-tessellation cost regardless of how many labels exist.
 /// <see cref="Render"/> must run once per frame; SMModuleDebugOptions.Simulate drives it.
 /// </summary>
-public static class BasisGizmoManager
+[AutoStaticsCleanup]
+public static partial class BasisGizmoManager
 {
     public static Action<bool> OnUseGizmosChanged; // Callback delegate.
     public static GameObject Parent;
@@ -49,6 +51,7 @@ public static class BasisGizmoManager
                 return;
             }
             renderLayer = value;
+            _sphereColorsDirty = true;
             ApplySharedLayerToLabels();
         }
     }
@@ -267,6 +270,7 @@ public static class BasisGizmoManager
         s.Active = true;
         s.Used = true;
         _sphereByID[linkedID] = slot;
+        _sphereColorsDirty = true;
         return true;
     }
 
@@ -292,6 +296,7 @@ public static class BasisGizmoManager
         s.Active = true;
         s.Used = true;
         _sphereByID[linkedID] = slot;
+        _sphereColorsDirty = true;
         return true;
     }
 
@@ -426,7 +431,7 @@ public static class BasisGizmoManager
         ref SphereSlot s = ref _spheres[slot];
         s.Position = position;
         s.Scale = new Vector3(size, size, size);
-        s.Color = (Color)color;
+        SetSphereColor(ref s, (Color)color);
         s.HasRotation = false;
         return true;
     }
@@ -813,7 +818,7 @@ public static class BasisGizmoManager
     {
         if (_sphereByID.TryGetValue(linkedID, out int slot))
         {
-            _spheres[slot].Color = color;
+            SetSphereColor(ref _spheres[slot], color);
             return true;
         }
         if (_linesByID.TryGetValue(linkedID, out LineSlot line))
@@ -859,7 +864,11 @@ public static class BasisGizmoManager
         }
         if (_sphereByID.TryGetValue(linkedID, out int slot))
         {
-            _spheres[slot].Layer = layer;
+            if (_spheres[slot].Layer != layer)
+            {
+                _spheres[slot].Layer = layer;
+                _sphereColorsDirty = true;
+            }
             return true;
         }
         if (_linesByID.TryGetValue(linkedID, out LineSlot line))
@@ -913,7 +922,11 @@ public static class BasisGizmoManager
     {
         if (_sphereByID.TryGetValue(linkedID, out int slot))
         {
-            _spheres[slot].Active = active;
+            if (_spheres[slot].Active != active)
+            {
+                _spheres[slot].Active = active;
+                _sphereColorsDirty = true;
+            }
             return;
         }
         if (_linesByID.TryGetValue(linkedID, out LineSlot line))
@@ -984,6 +997,7 @@ public static class BasisGizmoManager
             _sphereByID.Remove(linkedID);
             _spheres[slot] = default;
             _sphereFree.Push(slot);
+            _sphereColorsDirty = true;
         }
         else if (_linesByID.Remove(linkedID))
         {
@@ -1020,6 +1034,7 @@ public static class BasisGizmoManager
         _sphereFree.Clear();
         Array.Clear(_spheres, 0, _spheres.Length);
         _sphereHighWater = 0;
+        _sphereColorsDirty = true;
 
         _linesByID.Clear();
         foreach (KeyValuePair<int, LineBatch> kvp in _lineBatches)
@@ -1060,7 +1075,13 @@ public static class BasisGizmoManager
     private static Vector4[] _sphereChunkColors;
     private static Matrix4x4[] _solidChunkMatrices;
     private static readonly List<int> _sphereLayerScratch = new List<int>();
-    private static readonly List<MaterialPropertyBlock> _sphereChunkBlocks = new List<MaterialPropertyBlock>();
+    private sealed class SphereChunk
+    {
+        public readonly MaterialPropertyBlock Block = new MaterialPropertyBlock();
+        public bool Uploaded;
+    }
+    private static readonly List<SphereChunk> _sphereChunks = new List<SphereChunk>();
+    private static bool _sphereColorsDirty = true, _sphereUploadColors;
     private static readonly int ColorProperty = Shader.PropertyToID("_Color");
     private static readonly int ZTestProperty = Shader.PropertyToID("_ZTest");
 
@@ -1099,7 +1120,7 @@ public static class BasisGizmoManager
         public Vector2 SideWidth;
     }
 
-    internal static readonly VertexAttributeDescriptor[] LineVertexLayout =
+    [NoAutoStaticsCleanup] internal static readonly VertexAttributeDescriptor[] LineVertexLayout =
     {
         new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
         new VertexAttributeDescriptor(VertexAttribute.Color, VertexAttributeFormat.UNorm8, 4),
@@ -1170,7 +1191,7 @@ public static class BasisGizmoManager
     }
 
     private static readonly List<LabelDistance> _labelRanking = new List<LabelDistance>();
-    private static readonly Comparison<LabelDistance> LabelComparison = (a, b) => a.DistSq.CompareTo(b.DistSq);
+    [NoAutoStaticsCleanup] private static readonly Comparison<LabelDistance> LabelComparison = (a, b) => a.DistSq.CompareTo(b.DistSq);
 
     /// <summary>
     /// Submits every live gizmo for this frame's rendering and resolves which text
@@ -1230,10 +1251,12 @@ public static class BasisGizmoManager
         // The chunk counter keeps running across layers: each chunk owns a MaterialPropertyBlock
         // that has to survive until the frame renders, so two draws must never share one.
         int chunk = 0;
+        _sphereUploadColors = _sphereColorsDirty || maxDistSq < float.PositiveInfinity;
         for (int Index = 0; Index < bucketsUsed; Index++)
         {
             RenderSphereLayer(_sphereLayerScratch[Index], _sphereLayerBuckets[Index], ref chunk);
         }
+        _sphereColorsDirty = false;
     }
 
     private static readonly List<List<int>> _sphereLayerBuckets = new List<List<int>>();
@@ -1321,14 +1344,28 @@ public static class BasisGizmoManager
 
     private static void FlushSphereChunk(int chunkIndex, int count, int layer)
     {
-        while (_sphereChunkBlocks.Count <= chunkIndex)
+        while (_sphereChunks.Count <= chunkIndex)
         {
-            _sphereChunkBlocks.Add(new MaterialPropertyBlock());
+            _sphereChunks.Add(new SphereChunk());
         }
-        MaterialPropertyBlock block = _sphereChunkBlocks[chunkIndex];
-        block.SetVectorArray(ColorProperty, _sphereChunkColors);
-        Graphics.DrawMeshInstanced(_sphereMesh, 0, _sphereMaterial, _sphereChunkMatrices, count, block,
+        SphereChunk chunk = _sphereChunks[chunkIndex];
+        if (_sphereUploadColors || !chunk.Uploaded)
+        {
+            chunk.Block.SetVectorArray(ColorProperty, _sphereChunkColors);
+            chunk.Uploaded = true;
+        }
+        Graphics.DrawMeshInstanced(_sphereMesh, 0, _sphereMaterial, _sphereChunkMatrices, count, chunk.Block,
             ShadowCastingMode.Off, false, layer, null, LightProbeUsage.Off);
+    }
+
+    private static void SetSphereColor(ref SphereSlot s, Color color)
+    {
+        Vector4 next = color;
+        if (s.Color.x != next.x || s.Color.y != next.y || s.Color.z != next.z || s.Color.w != next.w)
+        {
+            s.Color = next;
+            _sphereColorsDirty = true;
+        }
     }
 
     private static void RenderLines(Vector3 viewer, float maxDistSq)

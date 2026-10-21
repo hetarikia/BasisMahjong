@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.Scripts.BasisSdk;
 using Basis.Scripts.BasisSdk.Players;
 using Basis.Scripts.Drivers;
@@ -13,7 +14,8 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
-public static class BasisSceneFactory
+[AutoStaticsCleanup]
+public static partial class BasisSceneFactory
 {
     public const string BasisLoadingSceneKey = "BasisLoadingScene";
 
@@ -23,7 +25,7 @@ public static class BasisSceneFactory
     public static float RespawnHeight = -100f;
     public static BasisLocalPlayer BasisLocalPlayer;
     private static bool _isLoadingLoadingScene = false;
-    private static AsyncOperationHandle<SceneInstance>? _loadingSceneHandle = null;
+    [NoAutoStaticsCleanup] private static AsyncOperationHandle<SceneInstance>? _loadingSceneHandle = null;
 
     public static void Initialize()
     {
@@ -32,6 +34,12 @@ public static class BasisSceneFactory
         SceneManager.sceneUnloaded -= OnSceneUnloaded;
         SceneManager.sceneUnloaded += OnSceneUnloaded;
 
+    }
+    public static void DeInitialize()
+    {
+        BasisScene.Ready -= Initialize;
+        BasisScene.Destroyed -= BasisSceneDestroyed;
+        SceneManager.sceneUnloaded -= OnSceneUnloaded;
     }
     private static void OnSceneUnloaded(Scene unloadedScene)
     {
@@ -177,19 +185,48 @@ public static class BasisSceneFactory
         // Find ProbeVolumePerSceneData directly in the scene hierarchy.
         // SetActiveScene uses a GUID-based lookup that can fail for bundle-loaded scenes
         // or if the component hasn't registered yet due to enable ordering.
-        ProbeVolumePerSceneData perSceneData = null;
+        List<ProbeVolumePerSceneData> found = new List<ProbeVolumePerSceneData>();
+        List<ProbeVolumePerSceneData> perRoot = new List<ProbeVolumePerSceneData>();
         GameObject[] rootObjects = scene.GetRootGameObjects();
         for (int i = 0; i < rootObjects.Length; i++)
         {
-            perSceneData = rootObjects[i].GetComponentInChildren<ProbeVolumePerSceneData>(true);
-            if (perSceneData != null)
+            rootObjects[i].GetComponentsInChildren(true, perRoot);
+            found.AddRange(perRoot);
+        }
+        // Only a component that is active in the hierarchy is usable: the toggle below works through
+        // OnDisable/OnEnable, and neither runs on an inactive GameObject, so picking one parented under
+        // a disabled object makes this whole function a silent no-op.
+        ProbeVolumePerSceneData perSceneData = null;
+        int foundCount = found.Count;
+        for (int i = 0; i < foundCount; i++)
+        {
+            if (found[i].gameObject.activeInHierarchy && found[i].bakingSet != null)
             {
+                perSceneData = found[i];
                 break;
             }
         }
-        if (perSceneData == null || perSceneData.bakingSet == null)
+        if (perSceneData == null)
         {
+            if (foundCount != 0)
+            {
+                BasisDebug.LogWarning("Scene " + scene.name + " has " + foundCount + " ProbeVolumePerSceneData components but none of them is active with a baking set, so it has no adaptive probe volume lighting.", BasisDebug.LogTag.Scene);
+            }
             return;
+        }
+        // Unity keeps exactly one of these per scene. Copies dragged in with pasted content share the
+        // scene GUID, so they collide in the pending load/unload maps and any one of them disabling
+        // cancels the cell load for the whole scene.
+        if (foundCount > 1)
+        {
+            BasisDebug.LogWarning("Scene " + scene.name + " has " + foundCount + " ProbeVolumePerSceneData components, removing " + (foundCount - 1) + " duplicates.", BasisDebug.LogTag.Scene);
+            for (int i = 0; i < foundCount; i++)
+            {
+                if (found[i] != perSceneData)
+                {
+                    Object.DestroyImmediate(found[i]);
+                }
+            }
         }
         // Switch baking set if it differs from the current one
         try
@@ -221,7 +258,9 @@ public static class BasisSceneFactory
         BNL.Log("Loading Camera Properties From Camera "+ Camera.gameObject.name);
         // Configure the local player's camera mostly based on the scene's placeholder camera.
         Camera RealCamera = BasisLocalCameraDriver.Instance.Camera;
+#pragma warning disable 618
         RealCamera.useOcclusionCulling = Camera.useOcclusionCulling;
+#pragma warning restore 618
         RealCamera.backgroundColor = Camera.backgroundColor;
         RealCamera.clearFlags = Camera.clearFlags;
         RealCamera.barrelClipping = Camera.barrelClipping;

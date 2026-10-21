@@ -21,7 +21,8 @@ namespace Basis.IK
         public BasisBoneHandle handleLeftToe, handleRightUpperLeg, handleRightLowerLeg, handleRightFoot, handleRightToe;
         public NativeArray<BasisBoneHandle> chainHeadToSpine;
         public NativeArray<BasisSpineRestFrame> chainSpineRestFrames;
-        public int chainChestIdx;
+        public RalivIKSpine.SpineData SpineData;
+        public int chainChestIdx, chainTorsoTopIdx;
         public Vector3 targetPositionHead, targetPositionHips;
         public Quaternion targetRotationHead, targetRotationHips, targetRotationChest;
         public Vector3 targetPositionChest, targetPositionChestRaw, playerUp, targetPositionLeftHand;
@@ -51,44 +52,25 @@ namespace Basis.IK
         public Quaternion tposeLeftLowerArmTwistBind, tposeLeftLowerArmChildBind, tposeRightLowerArmTwistBind;
         public Quaternion tposeRightLowerArmChildBind, tposeLeftUpperArmTwistBind, tposeLeftUpperArmChildBind;
         public Quaternion tposeRightUpperArmTwistBind, tposeRightUpperArmChildBind;
-        public BasisIKLockMode ikLockMode;
         public int spineMaxIterations;
-        public float spineTolerance, minHeadSpineHeight, maxBendDeg, minFactor, maxFactor, maxChestDeltaDeg;
-        public float spineBendPitch, spineBendYaw, spineBendRoll, upperChestBendPitch, upperChestBendYaw;
-        public float upperChestBendRoll, spineMaxForwardDeg, spineMaxBackwardDeg, spineMaxLateralDeg, spineSquishBoost;
-        public float spineGazeFollow, neckGazeFollow, neckExtensionDamp, neckFlexionDamp, spineCCDRelax, neckMaxConeDeg;
-        public float spineTwistKeep, spineNeckTwistKeep, chestSpringHz, chestSpringDamping, hipHingeStartDeg;
-        public float hipHingeMaxAddDeg, moveBodyBackWhenCrouching, crouchDepth, standingHeadHeight, trunkCounterbalance;
-        public float trunkCounterbalanceMaxSpineFrac, thoracicBendStiffen, spineTautBandFrac, bendTwistCoupling;
-        public float neckGazeFollowMaxDeg, chestBendPitch, chestBendYaw, chestBendRoll, neckYawShare, spineStretchMax;
+        public float spineTolerance, minHeadSpineHeight, minFactor, maxFactor;
+        public float moveBodyBackWhenCrouching, crouchDepth, standingHeadHeight;
         public float restChordHeadHips, restChordHeadLumbar, restChordHeadUpper, restReachHeadLumbar;
         public Quaternion chestTrackedRot, chestRestFromHead;
-        public bool chestIkTarget;
-        public float chestIkWeight, chestPosPullMaxDeg, chestPullMaxDist;
-        public int chestIkIterations, chestIkHeadRestoreSweeps;
-        public float chestArmSwingFactor, chestArmSwingMaxDeg, chestFollowChestShare;
-        public bool anatDifferentialStiffness, anatShoulderSlide, anatCervicalLordosis, anatPelvicTwistRouting;
         public bool spineAnatomicalRom;
-        public float lordosisPitchGainDeg, lordosisBaseDeg, lordosisNeckShare, lordosisMaxHeadPitchDeg;
-        public float lordosisExtremeStartDeg, lordosisExtremeFullDeg, lordosisExtremeRollForwardMaxDeg;
-        public float lordosisExtremeRollBackwardMaxDeg, lordosisExtremeHipsHorizontalMax;
-        public float lordosisExtremeChestHorizontalMax, lordosisExtremeHipsHorizontalLookUp;
-        public float lordosisExtremeChestHorizontalLookUp, lordosisExtremeHipsDownMax, lordosisExtremeChestDownMax;
-        public float lordosisExtremeHipsDownLookUp, lordosisExtremeChestDownLookUp;
+        // Without a hips tracker: how much the chest/spine take on the head's pitch/roll as shape. 1 = the full blend the
+        // spine solver uses with trackers (head pitch bows the chest out several cm), 0 = the spine only bends to reach the head.
+        public const float SpineHeadFollow = 0.3f;
         public bool shoulderSolveEnabled, shoulderShrugEnabled;
-        public float shoulderElevationFactor, shoulderProtractionFactor, shoulderCoupleRatio, shoulderMaxDeg;
-        public float shoulderSlideStartDeg, shoulderSlideMaxDeg, shoulderSlideFraction, lowerArmTwistFraction;
-        public float upperArmTwistFraction, swingSmoothRateDeg;
-        public bool protectElbow, collideTrackedElbow, elbowDragEnabled;
-        public float elbowDragHz;
+        public float shoulderElevationFactor, shoulderProtractionFactor, shoulderMaxDeg, shoulderTrackerBlendTime, lowerArmTwistFraction, upperArmTwistFraction;
+        public bool protectElbow, collideTrackedElbow;
+        public float armSwivelSmoothTime, armSwivelMaxRateDeg;
         public bool legSwivelSmoothing, kneeFootPoleHold, kneeFootPoleConditioning;
         public float trackedKneeSwivelMinCutoffHz, trackedKneeSwivelBeta, trackedKneeSwivelDerivCutoffHz;
         public bool collisionsEnabled;
         public float chestRadius, collisionSkin, handRadius, handSkin;
         public NativeArray<BasisChestSpringState> chestSpring;
-        public const int swingLeftElbow = 0, swingRightElbow = 1, swingCount = 2;
-        public NativeArray<BasisSwingContinuityState> swingContinuity;
-        public NativeArray<BasisArmSlotState> armState;
+        public NativeArray<BasisArmState> armState;
         public NativeArray<BasisLegSlotState> legState;
         public NativeArray<BasisLegDiagnostics> legDiagnostics;
         public BasisPoseStream poseStream;
@@ -227,6 +209,7 @@ namespace Basis.IK
             tposeShoulderToElbowRight *= k;
             tposeHeadToNeckLocal *= k;
             tposeLengthNeckToHips *= k;
+            RescaleRalivSpineIK(k);
 
             tposeBakeScale = newScale;
         }
@@ -246,9 +229,12 @@ namespace Basis.IK
             }
             if (Mathf.Abs(kt - 1f) >= 1e-6f)
             {
-                tposeHeadToNeckLocal *= kt;
-                tposeLengthNeckToHips *= kt;
-                minHeadSpineHeight *= kt;
+                RescaleRalivSpineSegments(kt, chainTorsoTopIdx);
+                float chain = RalivRestChainLength();
+                if (chain > 0f)
+                {
+                    minHeadSpineHeight = chain;
+                }
             }
             tposeArmFitScale = armScale;
             tposeTorsoFitScale = torsoScale;
@@ -258,7 +244,6 @@ namespace Basis.IK
             if (chainHeadToSpine.IsCreated) chainHeadToSpine.Dispose();
             if (chainSpineRestFrames.IsCreated) chainSpineRestFrames.Dispose();
             if (chestSpring.IsCreated) chestSpring.Dispose();
-            if (swingContinuity.IsCreated) swingContinuity.Dispose();
             if (armState.IsCreated) armState.Dispose();
             if (legState.IsCreated) legState.Dispose();
             if (legDiagnostics.IsCreated) legDiagnostics.Dispose();

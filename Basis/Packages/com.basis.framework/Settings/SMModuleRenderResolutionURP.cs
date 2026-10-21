@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.BasisUI;
 using Basis.Scripts.Device_Management;
 using Basis.Scripts.Rendering;
@@ -6,6 +7,7 @@ using UnityEngine;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.XR;
 
+[NoAutoStaticsCleanup]
 public class SMModuleRenderResolutionURP : BasisSettingsBase
 {
     public float RenderScale = 1;
@@ -40,11 +42,20 @@ public class SMModuleRenderResolutionURP : BasisSettingsBase
     private void OnEnable()
     {
         BasisDeviceManagement.OnBootModeChanged += OnBootModeChanged;
+        BasisDeviceManagement.OnXRSessionResumed += OnXRSessionResumed;
+        SMModuleAntialiasingURP.TemporalUpscalerChanged += OnTemporalUpscalerChanged;
     }
 
     private void OnDisable()
     {
         BasisDeviceManagement.OnBootModeChanged -= OnBootModeChanged;
+        BasisDeviceManagement.OnXRSessionResumed -= OnXRSessionResumed;
+        SMModuleAntialiasingURP.TemporalUpscalerChanged -= OnTemporalUpscalerChanged;
+    }
+
+    private void OnTemporalUpscalerChanged()
+    {
+        HandleRenderResolution(BasisSettingsDefaults.RenderResolution.RawValue);
     }
 
     private void OnBootModeChanged(string mode)
@@ -52,14 +63,19 @@ public class SMModuleRenderResolutionURP : BasisSettingsBase
         ReapplyDisplaySettings();
     }
 
+    private void OnXRSessionResumed()
+    {
+        ReapplyDisplaySettings(true);
+    }
+
     /// <summary>
     /// Foveation and render scale both need a live XR display, so the value loaded at startup is
     /// dropped when it arrives before the loader has one. Re-apply once the boot mode settles.
     /// </summary>
-    public void ReapplyDisplaySettings()
+    public void ReapplyDisplaySettings(bool force = false)
     {
         HandleRenderResolution(BasisSettingsDefaults.RenderResolution.RawValue);
-        HandleFoveatedRendering(BasisSettingsDefaults.FoveatedRendering.RawValue);
+        HandleFoveatedRendering(BasisSettingsDefaults.FoveatedRendering.RawValue, force);
     }
 
     public override void ValidSettingsChange(string matchedSettingName, string optionValue)
@@ -140,10 +156,11 @@ public class SMModuleRenderResolutionURP : BasisSettingsBase
         {
             XRSettings.eyeTextureResolutionScale = 1f;
         }
-        if (asset != null && !Mathf.Approximately(asset.renderScale, option))
+        float desktopScale = SMModuleAntialiasingURP.TemporalUpscalerActive ? Mathf.Min(option, 1f) : option;
+        if (asset != null && !Mathf.Approximately(asset.renderScale, desktopScale))
         {
-            asset.renderScale = option;
-            BasisDebug.Log($"Render scale set to {option:F3}", BasisDebug.LogTag.Video);
+            asset.renderScale = desktopScale;
+            BasisDebug.Log($"Render scale set to {desktopScale:F3}", BasisDebug.LogTag.Video);
         }
     }
 
@@ -156,11 +173,10 @@ public class SMModuleRenderResolutionURP : BasisSettingsBase
         //    BasisSettingsDefaults.DynamicResolutionTargetOverride.RawValue ? BasisSettingsDefaults.DynamicResolutionTargetFrameRate.RawValue : 0f);
     }
 
-    private void HandleFoveatedRendering(float value)
+    private void HandleFoveatedRendering(float value, bool force = false)
     {
         foveatedRenderingLevel = value;
 
-#if UNITY_ANDROID
         BasisDebug.Log($"changing Foveated To {value}", BasisDebug.LogTag.Video);
 
         SubsystemManager.GetSubsystems<XRDisplaySubsystem>(xrDisplays);
@@ -193,11 +209,16 @@ public class SMModuleRenderResolutionURP : BasisSettingsBase
             return;
         }
 
+        bool unchanged = Mathf.Approximately(xrDisplaySubsystem.foveatedRenderingLevel, value);
+        if (unchanged && (!force || Mathf.Approximately(value, 0f)))
+        {
+            return;
+        }
+
         xrDisplaySubsystem.foveatedRenderingFlags = XRDisplaySubsystem.FoveatedRenderingFlags.GazeAllowed;
         xrDisplaySubsystem.foveatedRenderingLevel = value;
 
         BasisDebug.Log($"foveatedRenderingLevel was set to {value}");
-#endif
     }
 }
 

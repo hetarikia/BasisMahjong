@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -5,7 +6,8 @@ using Basis.BasisUI;
 
 namespace BattlePhaze.SettingsManager.Integrations
 {
-    public class SMModuleQualityAndQualitySetURP : BasisSettingsBase
+    [AutoStaticsCleanup]
+    public partial class SMModuleQualityAndQualitySetURP : BasisSettingsBase
     {
         public UniversalAdditionalCameraData Data;
         public Camera Camera;
@@ -179,32 +181,32 @@ namespace BattlePhaze.SettingsManager.Integrations
             SMModuleShadowQualityURP.Apply(BasisSettingsDefaults.ShadowQuality.RawValue);
             SMModuleHDRURP.Apply(BasisSettingsDefaults.HDRSupport.RawValue);
 
-            // Very Low drops the local head's shadow-only clone; Low and above put it back.
+            // Very Low and Low drop the local head's shadow-only clone; Medium and above put it back.
             Basis.Scripts.Drivers.BasisAvatarDriver.ApplyLocalShadowCloneTier();
         }
 
         public override void ChangedSettings() { }
 
         // Per-tier values, cheapest first, indexed by BasisQualityTier.
-        private static readonly float[] LodBiasByTier = { 0.5f, 0.7f, 1f, 1.5f, 2f };
-        private static readonly SkinWeights[] SkinWeightsByTier =
+        [NoAutoStaticsCleanup] private static readonly float[] LodBiasByTier = { 0.5f, 0.7f, 1f, 1.5f, 2f };
+        [NoAutoStaticsCleanup] private static readonly SkinWeights[] SkinWeightsByTier =
         {
             SkinWeights.TwoBones, SkinWeights.FourBones, SkinWeights.FourBones,
             SkinWeights.Unlimited, SkinWeights.Unlimited,
         };
-        private static readonly int[] TextureMipmapLimitByTier = { 1, 0, 0, 0, 0 };
-        private static readonly int[] ColorGradingLutSizeByTier = { 16, 16, 32, 32, 32 };
-        private static readonly SoftShadowQuality[] SoftShadowQualityByTier =
+        [NoAutoStaticsCleanup] private static readonly int[] TextureMipmapLimitByTier = { 1, 0, 0, 0, 0 };
+        [NoAutoStaticsCleanup] private static readonly int[] ColorGradingLutSizeByTier = { 16, 16, 32, 32, 32 };
+        [NoAutoStaticsCleanup] private static readonly SoftShadowQuality[] SoftShadowQualityByTier =
         {
             SoftShadowQuality.Low, SoftShadowQuality.Low, SoftShadowQuality.Medium,
             SoftShadowQuality.High, SoftShadowQuality.High,
         };
-        private static readonly LightRenderingMode[] AdditionalLightsByTier =
+        [NoAutoStaticsCleanup] private static readonly LightRenderingMode[] AdditionalLightsByTier =
         {
             LightRenderingMode.Disabled, LightRenderingMode.PerVertex, LightRenderingMode.PerPixel,
             LightRenderingMode.PerPixel, LightRenderingMode.PerPixel,
         };
-        private static readonly DepthPrimingMode[] DepthPrimingByTier =
+        [NoAutoStaticsCleanup] private static readonly DepthPrimingMode[] DepthPrimingByTier =
         {
             DepthPrimingMode.Disabled, DepthPrimingMode.Disabled, DepthPrimingMode.Auto,
             DepthPrimingMode.Forced, DepthPrimingMode.Forced,

@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.Scripts.BasisCharacterController;
 using System;
 using System.Collections.Generic;
@@ -44,10 +45,20 @@ namespace Basis.Scripts.Drivers
     /// highest-priority entry to set a field wins it, and removing a key restores whatever
     /// the entry beneath it asked for, or the authored baseline when none remain.
     /// </summary>
-    public static class BasisLocomotionOverrides
+    [AutoStaticsCleanup]
+    public static partial class BasisLocomotionOverrides
     {
         public const string AdminKey = "BasisAdmin";
         public const int AdminPriority = int.MaxValue;
+
+        /// <summary>
+        /// The instance-wide policy the server pushes on join and on change. Reserved like
+        /// <see cref="AdminKey"/> so world content can neither clear nor outrank it, but ranked one
+        /// step below it, so a moderator singling out one player still wins over the house rules.
+        /// </summary>
+        public const string ServerPolicyKey = "BasisServerPolicy";
+        public const int ServerPolicyPriority = int.MaxValue - 1;
+
         public const int DefaultPriority = 0;
 
         private sealed class Entry
@@ -58,15 +69,17 @@ namespace Basis.Scripts.Drivers
             public BasisLocomotionValues Values;
         }
 
-        private static readonly object Sync = new object();
+        [NoAutoStaticsCleanup] private static readonly object Sync = new object();
         private static readonly List<Entry> Entries = new List<Entry>();
-        private static readonly Comparison<Entry> Order = CompareEntries;
+        [NoAutoStaticsCleanup] private static readonly Comparison<Entry> Order = CompareEntries;
         private static long _sequence;
         private static int _version;
 
         public static int Version => Volatile.Read(ref _version);
 
-        public static bool IsReservedKey(string key) => string.Equals(key, AdminKey, StringComparison.Ordinal);
+        public static bool IsReservedKey(string key) =>
+            string.Equals(key, AdminKey, StringComparison.Ordinal) ||
+            string.Equals(key, ServerPolicyKey, StringComparison.Ordinal);
 
         public static void Set(string key, BasisLocomotionValues values) => Set(key, DefaultPriority, values);
 

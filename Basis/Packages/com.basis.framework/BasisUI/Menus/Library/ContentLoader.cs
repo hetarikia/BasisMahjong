@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -20,7 +21,8 @@ namespace Basis.BasisUI
     /// <summary>
     /// Used by the LibraryProvider.cs to specifically load a type of content with a given BasisDataStoreItemKeys.ItemKey
     /// </summary>
-    public static class ContentLoader
+    [AutoStaticsCleanup]
+    public static partial class ContentLoader
     {
         /// <summary>
         /// A reachability warning from the last avatar load attempt, if any.
@@ -33,7 +35,7 @@ namespace Basis.BasisUI
         /// Static progress report forwarded during library content loading.
         /// Subscribe to OnProgressReport to receive loading progress updates.
         /// </summary>
-        public static readonly BasisProgressReport LibraryLoadProgress = new BasisProgressReport();
+        [NoAutoStaticsCleanup] public static readonly BasisProgressReport LibraryLoadProgress = new BasisProgressReport();
 
         private static void ForwardProgress(string uniqueID, float progress, string eventDescription)
         {
@@ -119,6 +121,7 @@ namespace Basis.BasisUI
 
             BasisProgressReport report = new BasisProgressReport();
             report.OnProgressReport += ForwardProgress;
+            report.OnProgressReport += BasisUILoadingBar.ProgressReport;
             using CancellationTokenSource cts = new CancellationTokenSource();
             BasisRuntimeSpawnRegistry.PendingLoad pending = BasisRuntimeSpawnRegistry.BeginPendingLoad(
                 item.Url,
@@ -131,6 +134,7 @@ namespace Basis.BasisUI
             void ForwardPendingProgress(string uniqueId, float progress, string info) =>
                 BasisRuntimeSpawnRegistry.ReportPendingLoadProgress(pending.PendingId, progress, info);
             report.OnProgressReport += ForwardPendingProgress;
+            BasisDownload download = BasisDownloadCenter.Begin(item.Mode == BundledContentHolder.Mode.Avatar ? BasisDownloadKind.Avatar : BasisDownloadKind.Prop, item.Url, bundle, cts, report);
             CancellationToken cancel = cts.Token;
 
             var selector = item.Mode switch
@@ -144,6 +148,15 @@ namespace Basis.BasisUI
             try
             {
                 GameObject createdObject = await BasisLoadHandler.LoadGameObjectBundle(BasisDeviceManagement.Instance.CreationGameobject, bundle, true, report, cancel, finalPos, finalRot, finalScale, modifyScale, selector, parentTarget ,false, ChangeColidersToCorrectLayer);
+
+                if (cancel.IsCancellationRequested)
+                {
+                    if (createdObject != null)
+                    {
+                        GameObject.Destroy(createdObject);
+                    }
+                    throw new OperationCanceledException(cancel);
+                }
 
                 if (createdObject != null)
                 {
@@ -183,8 +196,10 @@ namespace Basis.BasisUI
             }
             finally
             {
+                BasisDownloadCenter.End(download);
                 report.OnProgressReport -= ForwardPendingProgress;
                 report.OnProgressReport -= ForwardProgress;
+                report.OnProgressReport -= BasisUILoadingBar.ProgressReport;
                 BasisRuntimeSpawnRegistry.EndPendingLoad(pending.PendingId);
             }
         }
@@ -285,6 +300,15 @@ namespace Basis.BasisUI
             return newBounds;
         }
 
+        private static bool TryFindPlacementDevice(BasisDeviceManagement deviceInstance, out BasisInput input)
+        {
+            if (deviceInstance.FindDevice(out input, BasisDominantHand.DominantRole) && input.BasisPointRaycaster != null) return true;
+            if (deviceInstance.FindDevice(out input, BasisDominantHand.NonDominantRole) && input.BasisPointRaycaster != null) return true;
+            if (deviceInstance.FindDevice(out input, BasisBoneTrackedRole.CenterEye) && input.BasisPointRaycaster != null) return true;
+            input = null;
+            return false;
+        }
+
         public static async Task LoadProp(BasisDataStoreItemKeys.ItemKey item, BundledContentHolder.NetworkType desiredNetworkType, bool persistent = false, bool admin = false, bool modifyScale = false)
         {
             if (PropSpawnClaimed(item.Url)) return;
@@ -326,11 +350,9 @@ namespace Basis.BasisUI
                     case BasisPropSpawnPlacement.Unspecified:
                         BasisDeviceManagement deviceInstance = BasisDeviceManagement.Instance;
 
-                        if (!deviceInstance.FindDevice(out BasisInput input, BasisDominantHand.DominantRole) &&
-                            !deviceInstance.FindDevice(out input, BasisDominantHand.NonDominantRole) &&
-                            !deviceInstance.FindDevice(out input, BasisBoneTrackedRole.CenterEye))
+                        if (!TryFindPlacementDevice(deviceInstance, out BasisInput input))
                         {
-                            BasisDebug.LogError("LoadProp failed: no suitable device found (LeftHand/RightHand/CenterEye).");
+                            BasisDebug.LogError("LoadProp failed: no device with an active BasisPointRaycaster found (LeftHand/RightHand/CenterEye).");
                             return;
                         }
 
@@ -585,6 +607,7 @@ namespace Basis.BasisUI
 
                             BasisProgressReport report = new BasisProgressReport();
                             report.OnProgressReport += ForwardProgress;
+                            report.OnProgressReport += BasisUILoadingBar.ProgressReport;
                             using CancellationTokenSource cts = new CancellationTokenSource();
                             BasisRuntimeSpawnRegistry.PendingLoad pending = BasisRuntimeSpawnRegistry.BeginPendingLoad(
                                 item.Url,
@@ -597,6 +620,7 @@ namespace Basis.BasisUI
                             void ForwardPendingProgress(string uniqueId, float progress, string info) =>
                                 BasisRuntimeSpawnRegistry.ReportPendingLoadProgress(pending.PendingId, progress, info);
                             report.OnProgressReport += ForwardPendingProgress;
+                            BasisDownload download = BasisDownloadCenter.Begin(BasisDownloadKind.World, item.Url, bundle, cts, report);
                             CancellationToken cancel = cts.Token;
 
                             try
@@ -607,7 +631,7 @@ namespace Basis.BasisUI
                                     report,
                                     cancel
                                 );
-
+                                await BasisLoadHandler.ThrowIfSceneLoadCancelled(scene, cancel);
 
                                 if (scene.IsValid())
                                 {
@@ -644,8 +668,10 @@ namespace Basis.BasisUI
                             }
                             finally
                             {
+                                BasisDownloadCenter.End(download);
                                 report.OnProgressReport -= ForwardPendingProgress;
                                 report.OnProgressReport -= ForwardProgress;
+                                report.OnProgressReport -= BasisUILoadingBar.ProgressReport;
                                 BasisRuntimeSpawnRegistry.EndPendingLoad(pending.PendingId);
                             }
                         }

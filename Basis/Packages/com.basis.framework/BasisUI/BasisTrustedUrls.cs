@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -8,9 +9,11 @@ using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace Basis.BasisUI
 {
-    public static class BasisTrustedUrls
+    [AutoStaticsCleanup]
+    public static partial class BasisTrustedUrls
     {
         private const string DefaultsAddress = "BasisDefaultTrustedUrls";
+        [NoAutoStaticsCleanup] private static readonly string[] BuiltInSchemes = { "https://", "rtsp://", "rtspt://", "rtmp://" };
 
         private const string FileName = "trustedUrls.json";
         private const string LegacyFileName = "trustedVideoUrls.json";
@@ -80,7 +83,7 @@ namespace Basis.BasisUI
             foreach (string url in defaults.Urls)
             {
                 if (string.IsNullOrEmpty(url)) continue;
-                if (!url.StartsWith("https://")) continue;
+                if (!Array.Exists(BuiltInSchemes, s => url.StartsWith(s, StringComparison.Ordinal))) continue;
                 _builtInUrls.Add(url);
             }
         }

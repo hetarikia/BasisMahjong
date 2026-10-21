@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -41,7 +42,8 @@ public enum BasisAvatarProxyGizmoMode
 /// Drop it on anything in the scene, or set <see cref="Mode"/> from a console. It finds humanoid avatars
 /// itself and asks for their pose, so it works whether or not a tracer is running.
 /// </summary>
-public sealed class BasisAvatarProxyGizmo : MonoBehaviour
+[AutoStaticsCleanup]
+public sealed partial class BasisAvatarProxyGizmo : MonoBehaviour
 {
     /// <summary>Shared so a developer toggle or a console can drive it without holding the component.</summary>
     public static BasisAvatarProxyGizmoMode Mode = BasisAvatarProxyGizmoMode.Capsules;
@@ -142,7 +144,7 @@ public sealed class BasisAvatarProxyGizmo : MonoBehaviour
     private void Rescan()
     {
         humanoids.Clear();
-        Animator[] found = FindObjectsByType<Animator>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        Animator[] found = FindObjectsByType<Animator>(FindObjectsInactive.Exclude);
         for (int index = 0; index < found.Length; index++)
         {
             if (found[index] != null && found[index].isHuman) { humanoids.Add(found[index]); }

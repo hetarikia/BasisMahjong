@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System.Collections.Generic;
 using Basis.BasisUI;
 using UnityEngine;
@@ -34,6 +35,7 @@ namespace Basis
             settings != null && Matches(transport, settings.Width, settings.Height, settings.FrameRate, settings.WebQuality);
     }
 
+    [NoAutoStaticsCleanup]
     public static class BasisCameraStreamPresets
     {
         public const string CustomKey = "camera.streamPreset.custom";
@@ -58,7 +60,7 @@ namespace Basis
             List<BasisCameraStreamPreset> presets = new List<BasisCameraStreamPreset>(All.Length);
             for (int Index = 0; Index < All.Length; Index++)
             {
-                if (BasisHandHeldCamera.IsVideoTransportAvailable(All[Index].Transport)) presets.Add(All[Index]);
+                if (BasisCameraVideoPlatform.IsAvailable(All[Index].Transport)) presets.Add(All[Index]);
             }
             return presets;
         }
@@ -88,9 +90,9 @@ namespace Basis
             return CustomKey;
         }
 
-        public static string Label(string key) => BasisLocalization.Get(key, BasisHandHeldCamera.VideoOutputBackendName);
+        public static string Label(string key) => BasisLocalization.Get(key, BasisCameraVideoPlatform.BackendName);
 
-        public static string Tooltip(string key) => BasisLocalization.Get(key + ".tooltip", BasisHandHeldCamera.VideoOutputBackendName);
+        public static string Tooltip(string key) => BasisLocalization.Get(key + ".tooltip", BasisCameraVideoPlatform.BackendName);
 
         private static string[] BuildOptionKeys()
         {

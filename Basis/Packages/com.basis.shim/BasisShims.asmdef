@@ -3,7 +3,6 @@
     "rootNamespace": "",
     "references": [
         "Unity.Mathematics",
-        "LiteNetLib",
         "BasisNetworkCore",
         "BasisNetworkServer",
         "BasisDebug",
@@ -11,11 +10,14 @@
         "BasisEventDriver",
         "BasisSDK",
         "Basis Framework",
+        "BasisCommon",
+        "BasisSettings",
         "BasisMediaPlayer",
         "BasisSDKEditor",
         "BasisEditor",
         "HVR.Basis.Comms",
-        "BasisExamples"
+        "BasisExamples",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

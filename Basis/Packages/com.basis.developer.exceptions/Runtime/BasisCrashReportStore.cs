@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -26,7 +27,8 @@ using UnityEngine;
 /// base64(stack)</c> — base64 keeps newlines/arbitrary characters from breaking the line
 /// format without pulling in a JSON dependency.
 /// </summary>
-public static class BasisCrashReportStore
+[AutoStaticsCleanup]
+public static partial class BasisCrashReportStore
 {
     private const int MaxReplayEntries = 50;
     private const long MaxFileBytes = 2L * 1024 * 1024;
@@ -34,13 +36,14 @@ public static class BasisCrashReportStore
     private const int MaxStackChars = 12000;
 
     // Brief acknowledgement that the carried-over crash reports are being flushed on reconnect.
-    // These are fire-and-forget sends queued in a tight loop, so the loading bar's idle timeout
-    // clears this rather than a tracked per-packet curve.
+    // These are fire-and-forget sends queued in a tight loop, so the indicator clears itself after
+    // ReplayIndicatorSeconds rather than tracking a per-packet curve.
     private const string ReplayIndicatorKey = "CrashReportReplay";
     private const string ReplayIndicatorLabel = "Uploading crash reports";
     private const float ReplayIndicatorPercent = 80f;
+    private const float ReplayIndicatorSeconds = 1.5f;
 
-    private static readonly object FileLock = new object();
+    [NoAutoStaticsCleanup] private static readonly object FileLock = new object();
     private static readonly List<Entry> _previous = new List<Entry>();
 
     private static string _markerPath;
@@ -114,6 +117,9 @@ public static class BasisCrashReportStore
             TryDelete(_pendingPath);
             TryDelete(_markerPath);
         }
+        Application.quitting -= OnQuit;
+        BasisNetworkModeration.OnCrashReportingStateChanged -= OnCrashReportingStateChanged;
+        _initialized = false;
     }
 
     private static void OnCrashReportingStateChanged(bool enabled)
@@ -170,7 +176,7 @@ public static class BasisCrashReportStore
         }
         _replayed = true;
 
-        BasisUILoadingBar.ProgressReport(ReplayIndicatorKey, ReplayIndicatorPercent, ReplayIndicatorLabel);
+        BasisUILoadingBar.ProgressReportTransient(ReplayIndicatorKey, ReplayIndicatorPercent, ReplayIndicatorLabel, ReplayIndicatorSeconds);
         foreach (Entry e in toSend)
         {
             BasisErrorReportSender.SendPrevious(e.System, e.Message, e.Stack);

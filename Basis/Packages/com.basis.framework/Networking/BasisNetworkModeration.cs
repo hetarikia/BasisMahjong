@@ -1,4 +1,5 @@
-﻿using Basis.BasisUI;
+﻿using Unity.Scripting.LifecycleManagement;
+using Basis.BasisUI;
 using Basis.Network.Core;
 using Basis.Scripts.BasisCharacterController;
 using Basis.Scripts.BasisSdk.Players;
@@ -14,7 +15,8 @@ using System.Threading.Tasks;
 using UnityEngine;
 using static BasisNetworkCore.Serializable.SerializableBasis;
 
-public static class BasisNetworkModeration
+[AutoStaticsCleanup]
+public static partial class BasisNetworkModeration
 {
     private static bool ValidateString(string param, string paramName)
     {
@@ -492,12 +494,24 @@ public static class BasisNetworkModeration
                 HandlePeerLimit(reader);
                 break;
 
+            case AdminRequestMode.GlobalGetLocomotionPolicy:
+                HandleLocomotionPolicy(reader);
+                break;
+
             case AdminRequestMode.GlobalGetReductionSettings:
                 HandleReductionSettings(reader);
                 break;
 
             case AdminRequestMode.MuteStateApply:
                 HandleMuteStateApply(reader);
+                break;
+
+            case AdminRequestMode.MuteStateResult:
+                HandleMuteStateResult(reader);
+                break;
+
+            case AdminRequestMode.RenamePlayer:
+                HandlePlayerRenamed(reader);
                 break;
 
             case AdminRequestMode.LogBundleBegin:
@@ -550,8 +564,8 @@ public static class BasisNetworkModeration
             {
                 string initiatorName = ResolveDisplayName(initiatorPlayerId);
                 DisplayMessage(enabled
-                    ? $"{initiatorName} enabled announce mode for you - your voice is now broadcast to everyone."
-                    : $"{initiatorName} disabled announce mode for you - your voice is back to normal.");
+                    ? BasisLocalization.Get("settings.admin.notice.announceOn", initiatorName)
+                    : BasisLocalization.Get("settings.admin.notice.announceOff", initiatorName));
             }
         }
         else
@@ -583,9 +597,9 @@ public static class BasisNetworkModeration
 
     /// <summary>
     /// True if an admin currently has this player in shout mode. This is the GRANT, not the
-    /// mode: a player who picked shout from their own menu bar is not in here. The audio
-    /// widening keys off <see cref="BasisRemotePlayer.TalkMode"/> either way; this only drives
-    /// the admin UI's enable/disable label.
+    /// mode: a player who picked shout from their own menu bar is not in here. Every client
+    /// applies it to the remote player directly (<see cref="BasisRemotePlayer.SetAdminShoutHeld"/>),
+    /// so the widening does not wait on the target's own talk-mode broadcast.
     /// </summary>
     public static bool IsInShoutMode(ushort playerId) => adminShoutPlayers.Contains(playerId);
 
@@ -603,9 +617,16 @@ public static class BasisNetworkModeration
         if (enabled) adminShoutPlayers.Add(targetPlayerId);
         else adminShoutPlayers.Remove(targetPlayerId);
 
-        // Only the target acts on this. Unlike announce there is no second audio path to build
-        // for a remote shouter: the target enters the mode, its ordinary talk-mode broadcast
-        // reaches every client, and each listener's own transmit tick widens from there.
+        BasisNetworkPlayer.OnRemotePlayerLeft -= ForgetShoutGrant;
+        BasisNetworkPlayer.OnRemotePlayerLeft += ForgetShoutGrant;
+        BasisNetworkPlayer.OnLocalPlayerLeft -= ForgetAllShoutGrants;
+        BasisNetworkPlayer.OnLocalPlayerLeft += ForgetAllShoutGrants;
+        BasisNetworkPlayer.OnRemotePlayerJoined -= SeedShoutGrant;
+        BasisNetworkPlayer.OnRemotePlayerJoined += SeedShoutGrant;
+
+        // The target enters the mode and broadcasts it; every other client also applies the
+        // grant to the remote player directly, the way the announce driver does, so the
+        // widening and the nameplate do not wait on that broadcast.
         bool isLocalPlayer = BasisNetworkPlayer.LocalPlayer != null && targetPlayerId == BasisNetworkPlayer.LocalPlayer.playerId;
         if (isLocalPlayer)
         {
@@ -616,12 +637,31 @@ public static class BasisNetworkModeration
             {
                 string initiatorName = ResolveDisplayName(initiatorPlayerId);
                 DisplayMessage(enabled
-                    ? $"{initiatorName} put you in shout mode - your voice now carries twice as far."
-                    : $"{initiatorName} took you out of shout mode - your voice is back to normal.");
+                    ? BasisLocalization.Get("settings.admin.notice.shoutOn", initiatorName)
+                    : BasisLocalization.Get("settings.admin.notice.shoutOff", initiatorName));
             }
+        }
+        else if (BasisNetworkPlayers.RemotePlayers.TryGetValue(targetPlayerId, out BasisRemotePlayer remote) && remote != null)
+        {
+            remote.SetAdminShoutHeld(enabled);
         }
 
         OnShoutModeChanged?.Invoke(targetPlayerId, enabled);
+    }
+
+    private static void SeedShoutGrant(BasisNetworkPlayer networkPlayer, BasisRemotePlayer remotePlayer)
+    {
+        if (networkPlayer != null && remotePlayer != null && adminShoutPlayers.Contains(networkPlayer.playerId)) remotePlayer.SetAdminShoutHeld(true);
+    }
+
+    private static void ForgetShoutGrant(BasisNetworkPlayer networkPlayer, BasisRemotePlayer remotePlayer)
+    {
+        if (networkPlayer != null) adminShoutPlayers.Remove(networkPlayer.playerId);
+    }
+
+    private static void ForgetAllShoutGrants(BasisNetworkPlayer networkPlayer, BasisLocalPlayer localPlayer)
+    {
+        adminShoutPlayers.Clear();
     }
 
     /// <summary>
@@ -653,7 +693,7 @@ public static class BasisNetworkModeration
             string name = player.SafeDisplayName;
             if (!string.IsNullOrEmpty(name)) return name;
         }
-        return "An admin";
+        return BasisLocalization.Get("settings.admin.notice.unknownAdmin");
     }
 
     /// <summary>
@@ -727,6 +767,31 @@ public static class BasisNetworkModeration
             w => w.Put(muted));
     }
 
+    public struct MuteStateResult
+    {
+        public string Uuid;
+        public bool VoiceMuted;
+        public bool TextMuted;
+    }
+
+    public static event Action<MuteStateResult> OnMuteStateResult;
+
+    public static void QueryMuteState(string uuid)
+    {
+        if (!ValidateString(uuid, nameof(uuid))) return;
+        SendAdminRequest(AdminRequestMode.GetMuteState, w => w.Put(uuid));
+    }
+
+    private static void HandleMuteStateResult(NetDataReader reader)
+    {
+        OnMuteStateResult?.Invoke(new MuteStateResult
+        {
+            Uuid = reader.GetString(),
+            VoiceMuted = reader.GetBool(),
+            TextMuted = reader.GetBool(),
+        });
+    }
+
     private static void HandleMuteStateApply(NetDataReader reader)
     {
         bool voiceMuted = reader.GetBool();
@@ -743,15 +808,60 @@ public static class BasisNetworkModeration
         if (voiceChanged)
         {
             DisplayMessage(voiceMuted
-                ? "A moderator muted your voice - other players cannot hear you until you are unmuted."
-                : "A moderator unmuted your voice - other players can hear you again.");
+                ? BasisLocalization.Get("settings.admin.notice.voiceMuted")
+                : BasisLocalization.Get("settings.admin.notice.voiceUnmuted"));
         }
         if (textChanged)
         {
             DisplayMessage(textMuted
-                ? "A moderator muted your text chat - your messages will not be delivered until you are unmuted."
-                : "A moderator unmuted your text chat - your messages are delivered again.");
+                ? BasisLocalization.Get("settings.admin.notice.textMuted")
+                : BasisLocalization.Get("settings.admin.notice.textUnmuted"));
         }
+    }
+
+    #endregion
+
+    #region Rename
+
+    public static event Action<ushort, string> OnPlayerRenamed;
+
+    public static void RenamePlayer(ushort playerId, string newName)
+    {
+        if (ValidateString(newName, nameof(newName)))
+        {
+            SendAdminRequest(AdminRequestMode.RenamePlayer,
+                w => w.Put(playerId),
+                w => w.Put(newName));
+        }
+    }
+
+    private static void HandlePlayerRenamed(NetDataReader reader)
+    {
+        ushort targetPlayerId = reader.GetUShort();
+        string newName = reader.GetString();
+        ushort initiatorPlayerId = reader.GetUShort();
+
+        bool isLocalPlayer = BasisNetworkPlayer.LocalPlayer != null && targetPlayerId == BasisNetworkPlayer.LocalPlayer.playerId;
+        if (isLocalPlayer)
+        {
+            if (BasisLocalPlayer.Instance != null)
+            {
+                BasisLocalPlayer.Instance.DisplayName = newName;
+                BasisLocalPlayer.Instance.SetSafeDisplayname();
+            }
+            if (initiatorPlayerId != targetPlayerId)
+            {
+                DisplayMessage(BasisLocalization.Get("settings.admin.notice.renamed", ResolveDisplayName(initiatorPlayerId), BasisRemotePlayer.BuildSafeDisplayName(newName)));
+            }
+        }
+        else if (BasisNetworkPlayers.RemotePlayers.TryGetValue(targetPlayerId, out BasisRemotePlayer remote) && remote != null)
+        {
+            remote.DisplayName = newName;
+            remote.SetSafeDisplayname();
+            Basis.Scripts.UI.NamePlate.BasisRemoteNamePlateDriver.RebakeNamePlate(remote);
+        }
+
+        OnPlayerRenamed?.Invoke(targetPlayerId, newName);
     }
 
     #endregion
@@ -1192,6 +1302,18 @@ public static class BasisNetworkModeration
     /// </summary>
     public static bool GlobalSafeDisplayNamesForced { get; private set; }
 
+    public static bool GlobalGifsLocked { get; private set; }
+
+    public static event Action<bool> OnGlobalGifsLockedChanged;
+
+    public static bool GlobalContentRemovalLocked { get; private set; }
+
+    public static event Action<bool> OnGlobalContentRemovalLockedChanged;
+
+    public static bool GlobalExternalLinksLocked { get; private set; }
+
+    public static event Action<bool> OnGlobalExternalLinksLockedChanged;
+
     /// <summary>Fired when the text-chat lock flag changes.</summary>
     public static event Action<bool> OnGlobalTextChatLockedChanged;
 
@@ -1225,6 +1347,34 @@ public static class BasisNetworkModeration
         return perms != null &&
                (perms.Contains(BasisPermissions.PermNodes.All) ||
                 perms.Contains(BasisPermissions.PermNodes.ModerationGlobalLock));
+    }
+
+    public static bool LocalPlayerIsModerator()
+    {
+        var perms = BasisNetworkManagement.LocalPermissions;
+        if (perms == null) return false;
+        if (perms.Contains(BasisPermissions.PermNodes.All) || perms.Contains(BasisPermissions.PermNodes.PlayerModeration)) return true;
+        string prefix = BasisPermissions.PermNodes.PlayerModeration + ".";
+        foreach (string node in perms)
+        {
+            if (node != null && node.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    public static bool LocalPlayerHasNode(string node)
+    {
+        var perms = BasisNetworkManagement.LocalPermissions;
+        if (perms == null || string.IsNullOrWhiteSpace(node)) return false;
+        node = node.Trim();
+        if (perms.Contains(node) || perms.Contains(BasisPermissions.PermNodes.All)) return true;
+        int idx = node.Length;
+        while (true)
+        {
+            idx = node.LastIndexOf('.', idx - 1);
+            if (idx <= 0) return false;
+            if (perms.Contains(node.Substring(0, idx) + ".*")) return true;
+        }
     }
 
     /// <summary>
@@ -1283,6 +1433,12 @@ public static class BasisNetworkModeration
     /// </summary>
     public static bool PropGrabbingBlockedLocally =>
         GlobalPropGrabbingLocked && !LocalPlayerHasGlobalLockBypass();
+
+    public static bool GifsBlockedLocally =>
+        GlobalGifsLocked && !LocalPlayerHasGlobalLockBypass();
+
+    public static bool ExternalLinksBlockedLocally =>
+        GlobalExternalLinksLocked && !LocalPlayerHasGlobalLockBypass();
 
     private static void HandleGlobalLockState(NetDataReader reader)
     {
@@ -1448,7 +1604,34 @@ public static class BasisNetworkModeration
                 OnGlobalSafeDisplayNamesForcedChanged?.Invoke(GlobalSafeDisplayNamesForced);
             }
         }
-        BasisDebug.Log($"Global lock state updated - Avatars: {GlobalAvatarsLocked}, Props: {GlobalPropsLocked}, Worlds: {GlobalWorldsLocked}, Servers: {GlobalServersLocked}, ThirdPerson: {GlobalThirdPersonDisabled}, AdditionalAvatarData: {GlobalAdditionalAvatarDataLock}, CameraMask: {GlobalCameraDisallowMask}, Restriction: {GlobalUserRestrictionMode}, PlayspaceMover: {GlobalPlayspaceMoverLocked}, DirectConnect: {GlobalDirectConnectLocked}, Cilbox: {GlobalCilboxLocked}, Images: {GlobalImagesLocked}, EndEffectorIKDisabled: {GlobalEndEffectorIKDisabled}, TextChat: {GlobalTextChatLocked}, VoiceChat: {GlobalVoiceChatLocked}, MediaPlayer: {GlobalMediaPlayerLocked}, CameraCapture: {GlobalCameraCaptureLocked}, PropGrabbing: {GlobalPropGrabbingLocked}, SafeDisplayNames: {GlobalSafeDisplayNamesForced}", BasisDebug.LogTag.Networking);
+        if (reader.AvailableBytes >= 1)
+        {
+            bool nextGifsLocked = reader.GetBool();
+            if (nextGifsLocked != GlobalGifsLocked)
+            {
+                GlobalGifsLocked = nextGifsLocked;
+                OnGlobalGifsLockedChanged?.Invoke(GlobalGifsLocked);
+            }
+        }
+        if (reader.AvailableBytes >= 1)
+        {
+            bool nextContentRemovalLocked = reader.GetBool();
+            if (nextContentRemovalLocked != GlobalContentRemovalLocked)
+            {
+                GlobalContentRemovalLocked = nextContentRemovalLocked;
+                OnGlobalContentRemovalLockedChanged?.Invoke(GlobalContentRemovalLocked);
+            }
+        }
+        if (reader.AvailableBytes >= 1)
+        {
+            bool nextExternalLinksLocked = reader.GetBool();
+            if (nextExternalLinksLocked != GlobalExternalLinksLocked)
+            {
+                GlobalExternalLinksLocked = nextExternalLinksLocked;
+                OnGlobalExternalLinksLockedChanged?.Invoke(GlobalExternalLinksLocked);
+            }
+        }
+        BasisDebug.Log($"Global lock state updated - Avatars: {GlobalAvatarsLocked}, Props: {GlobalPropsLocked}, Worlds: {GlobalWorldsLocked}, Servers: {GlobalServersLocked}, ThirdPerson: {GlobalThirdPersonDisabled}, AdditionalAvatarData: {GlobalAdditionalAvatarDataLock}, CameraMask: {GlobalCameraDisallowMask}, Restriction: {GlobalUserRestrictionMode}, PlayspaceMover: {GlobalPlayspaceMoverLocked}, DirectConnect: {GlobalDirectConnectLocked}, Cilbox: {GlobalCilboxLocked}, Images: {GlobalImagesLocked}, EndEffectorIKDisabled: {GlobalEndEffectorIKDisabled}, TextChat: {GlobalTextChatLocked}, VoiceChat: {GlobalVoiceChatLocked}, MediaPlayer: {GlobalMediaPlayerLocked}, CameraCapture: {GlobalCameraCaptureLocked}, PropGrabbing: {GlobalPropGrabbingLocked}, SafeDisplayNames: {GlobalSafeDisplayNamesForced}, Gifs: {GlobalGifsLocked}, ContentRemoval: {GlobalContentRemovalLocked}, ExternalLinks: {GlobalExternalLinksLocked}", BasisDebug.LogTag.Networking);
         OnGlobalLockStateChanged?.Invoke(GlobalAvatarsLocked, GlobalPropsLocked, GlobalWorldsLocked, GlobalServersLocked);
     }
 
@@ -1480,6 +1663,9 @@ public static class BasisNetworkModeration
         if (GlobalCameraCaptureLocked) { GlobalCameraCaptureLocked = false; OnGlobalCameraCaptureLockedChanged?.Invoke(false); }
         if (GlobalPropGrabbingLocked) { GlobalPropGrabbingLocked = false; OnGlobalPropGrabbingLockedChanged?.Invoke(false); }
         if (GlobalSafeDisplayNamesForced) { GlobalSafeDisplayNamesForced = false; OnGlobalSafeDisplayNamesForcedChanged?.Invoke(false); }
+        if (GlobalGifsLocked) { GlobalGifsLocked = false; OnGlobalGifsLockedChanged?.Invoke(false); }
+        if (GlobalContentRemovalLocked) { GlobalContentRemovalLocked = false; OnGlobalContentRemovalLockedChanged?.Invoke(false); }
+        if (GlobalExternalLinksLocked) { GlobalExternalLinksLocked = false; OnGlobalExternalLinksLockedChanged?.Invoke(false); }
 
         if (GlobalEndEffectorIKDisabled)
         {
@@ -1503,6 +1689,18 @@ public static class BasisNetworkModeration
         // Moderation mutes are per-server state exactly like the locks above.
         if (LocalPlayerVoiceMutedByModerator) { LocalPlayerVoiceMutedByModerator = false; OnLocalVoiceMutedByModeratorChanged?.Invoke(false); }
         if (LocalPlayerTextMutedByModerator) { LocalPlayerTextMutedByModerator = false; OnLocalTextMutedByModeratorChanged?.Invoke(false); }
+
+        // The override stack itself is emptied by the disconnect path; this is the cached copy the
+        // admin panel reads, which would otherwise show the last server's policy on the next one.
+        BasisLocomotionValues policy = ServerLocomotionPolicy;
+        BasisLocomotionValues policyDefault = DefaultLocomotionPolicy;
+        if (policy.Fields != policyDefault.Fields || policy.JumpHeight != policyDefault.JumpHeight ||
+            policy.WalkSpeed != policyDefault.WalkSpeed || policy.RunSpeed != policyDefault.RunSpeed ||
+            policy.Gravity != policyDefault.Gravity || policy.Mode != policyDefault.Mode)
+        {
+            ServerLocomotionPolicy = policyDefault;
+            OnLocomotionPolicyChanged?.Invoke(policyDefault);
+        }
 
         if (contentLocksChanged)
         {
@@ -1650,6 +1848,21 @@ public static class BasisNetworkModeration
         SendAdminRequest(AdminRequestMode.GlobalToggleSafeDisplayNames);
     }
 
+    public static void GlobalToggleGifs()
+    {
+        SendAdminRequest(AdminRequestMode.GlobalToggleGifs);
+    }
+
+    public static void GlobalToggleContentRemoval()
+    {
+        SendAdminRequest(AdminRequestMode.GlobalToggleContentRemoval);
+    }
+
+    public static void GlobalToggleExternalLinks()
+    {
+        SendAdminRequest(AdminRequestMode.GlobalToggleExternalLinks);
+    }
+
     /// <summary>
     /// Admin: toggle remote end-effector IK anchoring server-wide. Server flips the flag and
     /// broadcasts the new lock state; every client mirrors it onto BasisNetworkReceiver.
@@ -1772,6 +1985,8 @@ public static class BasisNetworkModeration
 
     /// <summary>Server-pushed cap on active content-share spheres per player.</summary>
     public static int ServerMaxContentSpheresPerPlayer { get; private set; } = 32;
+    public static int ServerContentSphereLeaveTimeoutSeconds { get; private set; } = 60;
+    public static int ServerContentSphereDeletionTimerSeconds { get; private set; } = 0;
 
     /// <summary>Fired when the server pushes new resource limits (spheres/player).</summary>
     public static event Action<int> OnResourceLimitsChanged;
@@ -1779,6 +1994,11 @@ public static class BasisNetworkModeration
     private static void HandleResourceLimits(NetDataReader reader)
     {
         ServerMaxContentSpheresPerPlayer = reader.GetInt();
+        if (reader.AvailableBytes >= sizeof(int) * 2)
+        {
+            ServerContentSphereLeaveTimeoutSeconds = reader.GetInt();
+            ServerContentSphereDeletionTimerSeconds = reader.GetInt();
+        }
         OnResourceLimitsChanged?.Invoke(ServerMaxContentSpheresPerPlayer);
     }
 
@@ -1786,12 +2006,16 @@ public static class BasisNetworkModeration
     /// Admin: set the server-wide resource caps (content spheres per player).
     /// Persisted to config.xml and broadcast to every admin panel.
     /// </summary>
-    public static void SetGlobalResourceLimits(int maxContentSpheresPerPlayer)
+    public static void SetGlobalResourceLimits(int maxContentSpheresPerPlayer, int contentSphereLeaveTimeoutSeconds, int contentSphereDeletionTimerSeconds)
     {
         if (maxContentSpheresPerPlayer < 1) maxContentSpheresPerPlayer = 1;
+        if (contentSphereLeaveTimeoutSeconds < 0) contentSphereLeaveTimeoutSeconds = 0;
+        if (contentSphereDeletionTimerSeconds < 0) contentSphereDeletionTimerSeconds = 0;
         SendAdminRequest(
             AdminRequestMode.SetGlobalResourceLimits,
-            w => w.Put(maxContentSpheresPerPlayer));
+            w => w.Put(maxContentSpheresPerPlayer),
+            w => w.Put(contentSphereLeaveTimeoutSeconds),
+            w => w.Put(contentSphereDeletionTimerSeconds));
     }
 
     /// <summary>Server-pushed BSR reduction settings. Mirror of the config.xml BSR block; populated on connect and on every admin change.</summary>
@@ -2075,6 +2299,99 @@ public static class BasisNetworkModeration
         BasisLocomotionOverrides.Set(BasisLocomotionOverrides.AdminKey, BasisLocomotionOverrides.AdminPriority, values);
         BasisDebug.Log($"Locomotion override applied by player {initiatorId} ({applied})", BasisDebug.LogTag.Networking);
         OnLocomotionOverrideChanged?.Invoke(values);
+    }
+
+    /// <summary>
+    /// The instance-wide locomotion policy this server dictates. Unlike a moderator's one-shot
+    /// override this arrives on join too, so it is the state of the room rather than an event, and
+    /// the admin panel edits the live policy instead of a stale copy. No fields set means the
+    /// server dictates nothing.
+    /// </summary>
+    /// <summary>
+    /// What the policy reads as before any server has spoken. The numbers match the driver's own
+    /// authored values, so the admin panel opens on sensible sliders rather than on a row of zeros
+    /// that would freeze the instance if someone ticked a field and hit Apply.
+    /// </summary>
+    public static readonly BasisLocomotionValues DefaultLocomotionPolicy = new BasisLocomotionValues
+    {
+        Fields = BasisLocomotionField.None,
+        JumpHeight = 1f,
+        WalkSpeed = 2.5f,
+        RunSpeed = 4f,
+        Gravity = -9.81f,
+        Mode = BasisLocalCharacterDriver.Mode.Walk,
+    };
+
+    public static BasisLocomotionValues ServerLocomotionPolicy { get; private set; } = DefaultLocomotionPolicy;
+
+    /// <summary>Fired when the server pushes a new instance-wide locomotion policy.</summary>
+    public static event Action<BasisLocomotionValues> OnLocomotionPolicyChanged;
+
+    private static void HandleLocomotionPolicy(NetDataReader reader)
+    {
+        byte fields = reader.GetByte();
+        float jumpHeight = reader.GetFloat();
+        float walkSpeed = reader.GetFloat();
+        float runSpeed = reader.GetFloat();
+        float gravity = reader.GetFloat();
+        byte movementMode = reader.GetByte();
+
+        if (movementMode > (byte)BasisLocalCharacterDriver.Mode.NoClip)
+        {
+            movementMode = (byte)BasisLocalCharacterDriver.Mode.Walk;
+        }
+
+        // Every value travels even when its bit is clear, so the admin panel can show the stored
+        // policy with its toggles off instead of falling back to invented numbers.
+        BasisLocomotionValues values = new BasisLocomotionValues
+        {
+            Fields = (BasisLocomotionField)fields & BasisLocomotionField.All,
+            JumpHeight = jumpHeight,
+            WalkSpeed = walkSpeed,
+            RunSpeed = runSpeed,
+            Gravity = gravity,
+            Mode = (BasisLocalCharacterDriver.Mode)movementMode,
+        };
+        ServerLocomotionPolicy = values;
+
+        // Remove before Set: a Set under a live key merges fields, so without this a policy that
+        // drops a field would leave the old value of it still claimed.
+        BasisLocomotionOverrides.Remove(BasisLocomotionOverrides.ServerPolicyKey);
+        if (values.Fields == BasisLocomotionField.None)
+        {
+            BasisDebug.Log("Server locomotion policy cleared", BasisDebug.LogTag.Networking);
+        }
+        else
+        {
+            BasisLocomotionOverrides.Set(BasisLocomotionOverrides.ServerPolicyKey, BasisLocomotionOverrides.ServerPolicyPriority, values);
+            BasisDebug.Log($"Server locomotion policy applied ({values.Fields})", BasisDebug.LogTag.Networking);
+        }
+
+        OnLocomotionPolicyChanged?.Invoke(values);
+    }
+
+    /// <summary>
+    /// Admin: set the instance-wide locomotion policy — jump height, walk/run speed, gravity and
+    /// movement mode for everyone in this instance. Persisted to config.xml and pushed to every
+    /// client on join, so unlike <see cref="SetLocomotionOverrideAll(BasisLocomotionValues)"/> it
+    /// governs players who arrive later as well. No fields set clears it.
+    /// </summary>
+    public static void SetGlobalLocomotionPolicy(BasisLocomotionValues values)
+    {
+        SendAdminRequest(
+            AdminRequestMode.SetGlobalLocomotionPolicy,
+            w => w.Put((byte)values.Fields),
+            w => w.Put(values.JumpHeight),
+            w => w.Put(values.WalkSpeed),
+            w => w.Put(values.RunSpeed),
+            w => w.Put(values.Gravity),
+            w => w.Put((byte)values.Mode));
+    }
+
+    /// <summary>Drop the instance-wide locomotion policy, returning everyone to their own values.</summary>
+    public static void ClearGlobalLocomotionPolicy()
+    {
+        SetGlobalLocomotionPolicy(default);
     }
 
     private static void HandleUserOpusBitrateOverride(NetDataReader reader)

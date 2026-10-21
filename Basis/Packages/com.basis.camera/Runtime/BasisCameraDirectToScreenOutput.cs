@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -22,14 +23,16 @@ using UnityEngine.Rendering.Universal;
 /// an output taking it over stops whichever had it.
 /// </para>
 /// </summary>
+[AutoStaticsCleanup]
 [DisallowMultipleComponent]
-public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
+public sealed partial class BasisCameraDirectToScreenOutput : MonoBehaviour
 {
     /// <summary>
     /// After every camera that can draw to the window. URP renders the VR camera's mirror at the
     /// end of that camera's own stack, so whatever draws to the window after it is what stays.
     /// </summary>
     public const float ScreenCameraDepth = 100f;
+    public const int MinWindowDimension = 64;
 
     /// <summary>The output currently drawing to the window, or null while no camera is presenting.</summary>
     public static BasisCameraDirectToScreenOutput Presenting { get; private set; }
@@ -40,6 +43,10 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
 
     private RTHandle feedHandle;
     private RenderTexture feedTexture;
+
+    /// <summary>How the feed is placed on the window, as the owner has it; re-read with the feed on every frame.</summary>
+    public BasisCameraDirectToScreenFit Fit { get; private set; }
+    public Vector2 Alignment { get; private set; } = BasisCameraDirectToScreen.DefaultAlignment;
 
     private UniversalRenderPipelineAsset rendererSearchedOn;
     private bool rendererHasFeature;
@@ -60,6 +67,8 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
     /// </summary>
     public bool IsUsingFallbackPass => fallbackHooked;
 
+    public int TargetDisplay => screenCamera != null ? screenCamera.targetDisplay : 0;
+
     public static BasisCameraDirectToScreenOutput Create(BasisHandHeldCamera owner)
     {
         GameObject go = new GameObject("Direct To Screen Output");
@@ -79,15 +88,22 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
         screenCamera.backgroundColor = Color.black;
         screenCamera.cullingMask = 0;
         screenCamera.depth = ScreenCameraDepth;
+        // The engine's half of "not an XR camera". URP's allowXRRendering below only stops URP
+        // building eye passes; the engine still sizes a camera aimed at Both eyes to the eye
+        // texture while XR runs, and URP's final blit then covers only that much of the window —
+        // on a wide monitor, the headset mirror showed round the feed. None is Unity's
+        // "Main Display" target eye: the camera's pixel rect is the window's.
+        screenCamera.stereoTargetEye = StereoTargetEyeMask.None;
         screenCamera.targetDisplay = 0;
         screenCamera.targetTexture = null;
         screenCamera.allowDynamicResolution = false;
+#pragma warning disable 618
         screenCamera.useOcclusionCulling = false;
+#pragma warning restore 618
         screenCamera.orthographic = true;
         screenCamera.orthographicSize = 1f;
         screenCamera.nearClipPlane = 0.01f;
         screenCamera.farClipPlane = 1f;
-        screenCamera.stereoTargetEye = StereoTargetEyeMask.None;
 
         // HDR as the main camera has it, so a float feed (an EXR capture frame) keeps its range on
         // the way to the window and an HDR display gets URP's own encoding in the final blit; no
@@ -112,10 +128,39 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
     /// <summary>Whether <paramref name="camera"/> is this output's screen camera — the only camera the feature draws on.</summary>
     public bool IsScreenCamera(Camera camera) => screenCamera != null && ReferenceEquals(camera, screenCamera);
 
+    /// <summary>
+    /// The surface the feed lands on, in pixels: the screen camera's own pixel size, which is
+    /// exactly what URP's final blit covers, so a feed shaped to it can never disagree with the
+    /// area it is drawn over. The screen stands in before the camera has a size.
+    /// </summary>
+    public bool TryGetWindowSize(out int width, out int height)
+    {
+        if (screenCamera != null && screenCamera.pixelWidth >= MinWindowDimension && screenCamera.pixelHeight >= MinWindowDimension)
+        {
+            width = screenCamera.pixelWidth;
+            height = screenCamera.pixelHeight;
+            return true;
+        }
+        if (TargetDisplay > 0) return BasisCameraDirectToScreen.TryGetDisplaySize(TargetDisplay, out width, out height) && width >= MinWindowDimension && height >= MinWindowDimension;
+        width = Screen.width;
+        height = Screen.height;
+        return width >= MinWindowDimension && height >= MinWindowDimension;
+    }
+
     /// <summary>Starts, or keeps, drawing <paramref name="feed"/> to the window, taking the window from any other output.</summary>
-    public void Present(RenderTexture feed)
+    public void Present(RenderTexture feed) => Present(feed, 0);
+
+    public void Present(RenderTexture feed, int display)
     {
         SetFeed(feed);
+        if (screenCamera != null && screenCamera.targetDisplay != display)
+        {
+            screenCamera.enabled = false;
+            SetBlank(screenCamera.targetDisplay, true);
+            screenCamera.targetDisplay = display;
+        }
+        BasisCameraDirectToScreen.ActivateDisplay(display);
+        SetBlank(display, false);
         if (!IsPresenting)
         {
             if (Presenting != null) Presenting.Stop();
@@ -129,8 +174,54 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
     public void Stop()
     {
         if (IsPresenting) Presenting = null;
-        if (screenCamera != null) screenCamera.enabled = false;
+        if (screenCamera != null)
+        {
+            screenCamera.enabled = false;
+            SetBlank(screenCamera.targetDisplay, true);
+        }
         UnhookFallback();
+    }
+
+    private static Camera[] blankCameras;
+
+    private static void SetBlank(int display, bool on)
+    {
+        if (display <= 0 || display >= BasisCameraDirectToScreen.MaxDisplays) return;
+        if (on && blankCameras != null && blankCameras[display] != null) blankCameras[display].enabled = true;
+        else if (!on)
+        {
+            Camera blank = EnsureBlank(display);
+            if (blank != null) blank.enabled = false;
+        }
+    }
+
+    private static Camera EnsureBlank(int display)
+    {
+        blankCameras ??= new Camera[BasisCameraDirectToScreen.MaxDisplays];
+        if (blankCameras[display] != null || !Application.isPlaying) return blankCameras[display];
+
+        GameObject go = new GameObject("Direct To Screen Blank " + (display + 1));
+        DontDestroyOnLoad(go);
+        Camera blank = go.AddComponent<Camera>();
+        blank.enabled = false;
+        blank.clearFlags = CameraClearFlags.SolidColor;
+        blank.backgroundColor = Color.black;
+        blank.cullingMask = 0;
+        blank.depth = ScreenCameraDepth;
+        blank.stereoTargetEye = StereoTargetEyeMask.None;
+        blank.targetDisplay = display;
+        blank.orthographic = true;
+        blank.allowHDR = false;
+        blank.allowMSAA = false;
+        UniversalAdditionalCameraData data = blank.GetUniversalAdditionalCameraData();
+        data.renderPostProcessing = false;
+        data.renderShadows = false;
+        data.requiresColorOption = CameraOverrideOption.Off;
+        data.requiresDepthOption = CameraOverrideOption.Off;
+        data.allowXRRendering = false;
+        data.volumeLayerMask = 0;
+        blankCameras[display] = blank;
+        return blank;
     }
 
     /// <summary>
@@ -141,7 +232,11 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
     /// </summary>
     public bool TryGetFeed(out RTHandle handle, out RenderTexture texture)
     {
-        if (owner != null) SetFeed(owner.PreviewTexture);
+        if (owner != null)
+        {
+            SetFeed(owner.PreviewTexture);
+            SetPlacement(owner.DirectToScreenFit, owner.DirectToScreenAlignment);
+        }
         handle = feedHandle;
         texture = feedTexture;
         return handle != null && texture != null && texture.IsCreated();
@@ -163,6 +258,13 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
 
         feedTexture = feed;
         feedHandle = RTHandles.Alloc(new RenderTargetIdentifier(feed), feed.name);
+    }
+
+    /// <summary>Points the output at a fit and alignment by hand, for an output with no owner to read them from.</summary>
+    public void SetPlacement(BasisCameraDirectToScreenFit fit, Vector2 alignment)
+    {
+        Fit = fit;
+        Alignment = alignment;
     }
 
     private void ReleaseFeedHandle()
@@ -250,7 +352,7 @@ public sealed class BasisCameraDirectToScreenOutput : MonoBehaviour
         ScriptableRenderer renderer = screenCameraData.scriptableRenderer;
         if (renderer == null) return;
 
-        fallbackPass.Setup(handle, texture);
+        fallbackPass.Setup(handle, texture, Fit, Alignment);
         renderer.EnqueuePass(fallbackPass);
     }
 

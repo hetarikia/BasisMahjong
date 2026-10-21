@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using Basis.BTween;
 using Basis.Scripts.BasisSdk.Interactions;
 using Basis.Scripts.BasisSdk.Players;
@@ -14,7 +15,9 @@ using Basis.Scripts.UI;
 using Basis.Scripts.UI.NamePlate;
 using GatorDragonGames.JigglePhysics;
 using HVR.Basis.Comms;
+#if STEAMAUDIO_ENABLED && !UNITY_WEBGL
 using SteamAudio;
+#endif
 using System;
 using System.Collections.Generic;
 using Unity.Jobs;
@@ -28,6 +31,7 @@ namespace Basis.EventDriver
     /// Central per-frame driver that coordinates device actions, networking compute/apply,
     /// physics scheduling for JigglePhysics, and various local simulation hooks.
     /// </summary>
+    [AutoStaticsCleanup]
     [DefaultExecutionOrder(-31950)]
     public partial class BasisEventDriver : MonoBehaviour
     {
@@ -170,6 +174,7 @@ namespace Basis.EventDriver
         {
             try
             {
+                BasisOpenLipSyncContext.StopWorker();
                 BasisOpenLipSyncDriver.Shutdown();
                 Basis.Scripts.Networking.Sync.BasisSyncDriver.OnDestroy();
                 Application.onBeforeRender -= OnBeforeRender;
@@ -198,6 +203,7 @@ namespace Basis.EventDriver
             {
                 Application.onBeforeRender -= OnBeforeRender;
             }
+            BasisSceneFactory.DeInitialize();
         }
         /// <summary>
         /// Unity update loop. Drains main-thread actions, advances network simulation (compute),
@@ -213,7 +219,7 @@ namespace Basis.EventDriver
         {
             using var updateScope = Prof.Update.Auto();
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if UNITY_EDITOR || UNITY_INCLUDE_INSTRUMENTATION
             BasisFiniteWatchdog.Checkpoint("UpdateStart (render / physics / previous frame tail)");
             BasisFiniteWatchdog.CheckpointRemote("UpdateStart (render / physics / previous frame tail)");
 #endif
@@ -260,6 +266,10 @@ namespace Basis.EventDriver
                     BasisOpenLipSyncContext.ProcessAllPending();
                 }
             }
+            using (Prof.NetworkTransportTick.Auto())
+            {
+                BasisNetworkManagement.TickTransports();
+            }
             // Drain everything that arrived from worker threads
             using (Prof.MainThreadActions.Auto())
             {
@@ -294,6 +304,13 @@ namespace Basis.EventDriver
                 using (Prof.InputSystemUpdate.Auto())
                 {
                     BasisInputSystemPump.Pump(realtimeSinceStartupAsDouble);
+                }
+            }
+            if (BasisDeviceManagement.HasEvents)
+            {
+                using (Prof.DeviceManagementKick.Auto())
+                {
+                    BasisDeviceManagement.Instance.SimulateKick();
                 }
             }
 
@@ -347,7 +364,7 @@ namespace Basis.EventDriver
             }
             timeSinceLastUpdate += DeltaTime;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if UNITY_EDITOR || UNITY_INCLUDE_INSTRUMENTATION
             BasisFiniteWatchdog.Checkpoint("UpdateTail (pre-animator)");
             BasisFiniteWatchdog.CheckpointRemote("UpdateTail (pre-animator)");
 #endif
@@ -368,6 +385,8 @@ namespace Basis.EventDriver
 
             fixedDeltaTime = Time.fixedDeltaTime;
             fixedTimeAsDouble = Time.fixedTimeAsDouble;
+            try { BasisPickupJointInteractable.OnFixedSimulate?.Invoke(fixedTimeAsDouble); }
+            catch (Exception ex) { BasisDebug.LogErrorOnce($"OnFixedSimulate failed: {ex}", BasisDebug.LogTag.Event); }
             if (BasisLocalPlayer.PlayerReady)
             {
                 using (Prof.SceneFactorySimulate.Auto())
@@ -475,21 +494,15 @@ namespace Basis.EventDriver
                 Basis.Scripts.Networking.Sync.BasisSyncDriver.ScheduleRemote(DeltaTime);
             }
 
+            // The SteamVR input worker kicked in Update is joined here, ahead of the eye block
+            // (the first main-thread reader of action state this frame).
+            if (BasisDeviceManagement.HasEvents)
+            {
+                BasisDeviceManagement.Instance.SimulateJoin();
+            }
             using (Prof.EyeTrackingSimulate.Auto())
             {
                 Basis.Scripts.Device_Management.EyeTracking.BasisEyeTrackingManager.Simulate();
-            }
-
-            // Kick the SteamVR input update onto its worker thread. Placed after the eye block
-            // (the last main-thread reader of action state) so it overlaps the comms/network-apply
-            // work below; the DeviceManagement.Simulate block joins it before the local player
-            // polls input.
-            if (BasisDeviceManagement.HasEvents)
-            {
-                using (Prof.DeviceManagementKick.Auto())
-                {
-                    BasisDeviceManagement.Instance.SimulateKick();
-                }
             }
 
             using (Prof.CommsActuators.Auto())
@@ -722,7 +735,7 @@ namespace Basis.EventDriver
                 catch (Exception ex) { BasisDebug.LogErrorOnce($"ScheduleTransmitJobs failed: {ex}", BasisDebug.LogTag.Event); }
             }
 
-#if STEAMAUDIO_ENABLED
+#if STEAMAUDIO_ENABLED && !UNITY_WEBGL
             // Stays after the local eye apply: the listener/source gather TAA can share the local
             // player hierarchy with the eye-write job, and the two have never been in flight
             // together — the gather also wants the final camera-side poses for this frame.
@@ -937,7 +950,7 @@ namespace Basis.EventDriver
             ProfileEnd(PROF_NAMEPLATE_COMPLETE);
             BasisFiniteWatchdog.CheckpointRemote("PostNamePlates");
 
-#if STEAMAUDIO_ENABLED
+#if STEAMAUDIO_ENABLED && !UNITY_WEBGL
             // ── SteamAudio apply ──
             // After the jiggle pose schedule, not in OnBeforeRender: its reap/push/snapshot
             // main-thread cost overlaps the in-flight pose jobs. Nothing it reads is fresher
@@ -947,6 +960,10 @@ namespace Basis.EventDriver
             {
                 SteamAudioManager.Apply();
             }
+#endif
+#if UNITY_WEBGL && !UNITY_EDITOR
+            Basis.Scripts.Platform.BasisWebVoiceOutput.Tick(unscaledDeltaTime);
+            if (Basis.Scripts.Platform.BasisWebAddressables.IsReady) BasisOpenLipSyncDriver.WebTick(Basis.Scripts.Platform.BasisWebVoiceOutput.SampleRate, unscaledDeltaTime);
 #endif
 
             using (Prof.ContentSphereComplete.Auto())

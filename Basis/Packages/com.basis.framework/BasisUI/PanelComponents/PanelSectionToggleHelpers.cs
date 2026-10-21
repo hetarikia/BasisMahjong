@@ -1,10 +1,12 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace Basis.BasisUI
 {
-    public static class PanelSectionToggleHelpers
+    [AutoStaticsCleanup]
+    public static partial class PanelSectionToggleHelpers
     {
         /// <summary>
         /// Creates a titled content group for a section toggle and registers it for divider ownership.
@@ -149,7 +151,7 @@ namespace Basis.BasisUI
 
                 box = BuildSectionBox(container, start);
                 sectionToggle.RegisterContentContainer(box);
-                box.transform.SetSiblingIndex(sectionToggle.transform.GetSiblingIndex() + 1);
+                MoveBesideHeader(sectionToggle, box.transform, 0);
             }
 
             void Clear()
@@ -187,6 +189,47 @@ namespace Basis.BasisUI
             };
 
             return sectionToggle;
+        }
+
+        /// <summary>
+        /// Settles a section after it expands, collapses or changes rows: rebuilds its open box, or for
+        /// a flat section each row card under the header, innermost first, then every ancestor out to
+        /// <paramref name="stopAt"/> (pass the tab page's content). Rebuilding the tab root instead is a
+        /// no-op, and one pass on the page measures a card before the card has resized.
+        /// </summary>
+        public static void RebuildSectionLayout(PanelSectionToggle header, RectTransform stopAt)
+        {
+            if (header == null || !(header.transform.parent is RectTransform host))
+            {
+                return;
+            }
+
+            List<Transform> boxes = new List<Transform>(1);
+            header.GetContentContainers(boxes);
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                if (boxes[i].gameObject.activeInHierarchy && boxes[i].TryGetComponent(out PanelElementDescriptor box))
+                {
+                    PanelElementDescriptor.RebuildLayoutChain(box.ContentParent, stopAt);
+                    return;
+                }
+            }
+
+            for (int i = header.transform.GetSiblingIndex() + 1; i < host.childCount; i++)
+            {
+                Transform row = host.GetChild(i);
+                if (row.GetComponent<PanelSectionToggle>() != null)
+                {
+                    break;
+                }
+
+                if (row.gameObject.activeInHierarchy && row.TryGetComponent(out PanelElementDescriptor rowDesc))
+                {
+                    PanelElementDescriptor.RebuildLayoutChain(rowDesc.ContentParent, rowDesc.rectTransform);
+                }
+            }
+
+            PanelElementDescriptor.RebuildLayoutChain(host, stopAt);
         }
 
         /// <summary>
@@ -237,6 +280,24 @@ namespace Basis.BasisUI
         }
 
         private static readonly List<Transform> _reparentBuffer = new();
+
+        /// <summary>
+        /// Puts freshly built lazy content directly under its header. The builder writes rows to
+        /// the container it was handed, but a lazy section nested inside a boxed one has had its
+        /// header lifted into the outer card by the time it first opens, so the content is moved
+        /// across to whatever parent the header lives in now. Left where the builder put it, it
+        /// would land at the bottom of the page, outside the section it belongs to.
+        /// </summary>
+        private static void MoveBesideHeader(PanelSectionToggle sectionToggle, Transform content, int offset)
+        {
+            Transform host = sectionToggle.transform.parent;
+            if (host != null && content.parent != host)
+            {
+                content.SetParent(host, false);
+            }
+
+            content.SetSiblingIndex(sectionToggle.transform.GetSiblingIndex() + 1 + offset);
+        }
 
         /// <summary>
         /// Builds a section whose collapsible content is added directly under the bar (no
@@ -304,10 +365,9 @@ namespace Basis.BasisUI
 
                 // The builder appends to the end of the tab; walk the new rows back up so they
                 // sit under this section's header rather than below every later section.
-                int insertAt = sectionToggle.transform.GetSiblingIndex() + 1;
                 for (int i = 0; i < content.Count; i++)
                 {
-                    content[i].transform.SetSiblingIndex(insertAt + i);
+                    MoveBesideHeader(sectionToggle, content[i].transform, i);
                 }
             }
 
@@ -436,10 +496,12 @@ namespace Basis.BasisUI
         /// </summary>
         private static void SetContentActive(Component content, bool active)
         {
+            if (content == null)
+            {
+                return;
+            }
             switch (content)
             {
-                case null:
-                    return;
                 case PanelComponent panelComponent:
                     panelComponent.Descriptor.SetActive(active);
                     return;

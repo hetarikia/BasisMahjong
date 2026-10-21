@@ -15,7 +15,9 @@ namespace Basis.IK
         private bool initialized;
         private float lenNeckToChest, lenChestToSpine, lenSpineToHips, lenSpineTotal, chestTransform, spineTransform, restHipsLocalY;
         private float restHeadLocalY, hipsRestDropY;
-        private float3 hipsFromEyeTposeXZ, headFromEyeTposeXZ, yawPivotFromEyeTposeXZ, eyeFromHeadTpose;
+        private float3 hipsFromEyeTposeXZ, headFromEyeTposeXZ, yawPivotFromEyeTposeXZ, eyeFromHeadTpose, hipsFromHeadTpose;
+        private float3 restChordDir, chestRestPerp, spineRestPerp;
+        private float chestRestAlong, spineRestAlong;
         private float tposeNeckMinusEyeY;
         private readonly BasisNodPivotSampler nodPivotSampler = new BasisNodPivotSampler(30);
         private float3 gazeSwingLever;
@@ -124,7 +126,7 @@ namespace Basis.IK
 
             bool isVR = BasisDeviceManagement.IsCurrentModeVR();
 
-            float torsoYawDeadzoneDeg = isVR ? (Basis.BasisUI.BasisSettingsDefaults.VSpineTorsoYawPlayInVR.RawValue ? Basis.BasisUI.BasisSettingsDefaults.VSpineTorsoYawDeadzoneVRDeg.RawValue : 0f) : Basis.BasisUI.BasisSettingsDefaults.VSpineTorsoYawDeadzoneDeg.RawValue;
+            float torsoYawDeadzoneDeg = Basis.BasisUI.BasisSettingsDefaults.VSpineTorsoYawDeadzoneDeg.RawValue;
 
             if (BasisLocalPlayer.Instance.LocalCharacterDriver.IsProne)
             {
@@ -133,6 +135,9 @@ namespace Basis.IK
 
             var leftFoot = BasisLocalBoneDriver.LeftFootControl;
             var rightFoot = BasisLocalBoneDriver.RightFootControl;
+            // No hips/chest tracker (desktop, 3-point): pin the hips below the head bone. Without a hips tracker we assume
+            // no feet trackers either. Prone and seated keep their own paths.
+            bool headPinnedHips = TrackerOwned(hips) == 0 && (TrackerOwned(chest) == 0 || chest.TrackerFollowsBody) && !BasisLocalPlayer.Instance.LocalCharacterDriver.IsProne;
             bool leftFootTracked = leftFoot != null && leftFoot.HasTracked == BasisHasTracked.HasTracker;
             bool rightFootTracked = rightFoot != null && rightFoot.HasTracked == BasisHasTracked.HasTracker;
 
@@ -204,6 +209,13 @@ namespace Basis.IK
                 HipsCompressionStrength = Basis.BasisUI.BasisSettingsDefaults.VSpineHipsCompressionStrength.RawValue,
                 HipsMaxDropMeters = Basis.BasisUI.BasisSettingsDefaults.VSpineHipsMaxDropMeters.RawValue * BasisHeightDriver.AvatarToDefaultRatioScaledWithAvatarScale,
                 HipsRestDropY = hipsRestDropY,
+                RestChordDir = restChordDir,
+                ChestRestAlong = chestRestAlong,
+                ChestRestPerp = chestRestPerp,
+                SpineRestAlong = spineRestAlong,
+                SpineRestPerp = spineRestPerp,
+                HeadPinnedHips = (byte)(headPinnedHips ? 1 : 0),
+                HipsFromHeadRest = hipsFromHeadTpose,
             };
 
             new BasisVirtualSpineCore.BasisVirtualSpineSolveJob
@@ -241,6 +253,12 @@ namespace Basis.IK
         {
             return c.TargetIndex >= 0 ? c.Owner.Controls[c.TargetIndex] : c;
         }
+        public static void RestOffsetFromChord(float3 bone, float3 hips, float3 chord, float chordLenSq, out float along, out float3 perp)
+        {
+            float3 d = bone - hips;
+            along = chordLenSq > 1e-10f ? math.dot(d, chord) / chordLenSq : 0f;
+            perp = d - chord * along;
+        }
         private void RecomputeSegmentLengths(BasisLocalBoneControl eye, BasisLocalBoneControl head, BasisLocalBoneControl neck, BasisLocalBoneControl chest, BasisLocalBoneControl spine, BasisLocalBoneControl hips)
         {
             float3 pHead = head.TposeLocalScaled.position;
@@ -258,10 +276,17 @@ namespace Basis.IK
 
             restHipsLocalY = pNeck.y - lenSpineTotal;
 
+            float3 restChord = pNeck - pHips;
+            float restChordLenSq = math.lengthsq(restChord);
+            restChordDir = restChordLenSq > 1e-10f ? restChord * math.rsqrt(restChordLenSq) : new float3(0f, 1f, 0f);
+            RestOffsetFromChord(pChest, pHips, restChord, restChordLenSq, out chestRestAlong, out chestRestPerp);
+            RestOffsetFromChord(pSpine, pHips, restChord, restChordLenSq, out spineRestAlong, out spineRestPerp);
+
             restHeadLocalY = math.max(pHead.y, 1e-3f);
 
             float3 pEye = eye.TposeLocalScaled.position;
             eyeFromHeadTpose = pEye - pHead;
+            hipsFromHeadTpose = pHips - pHead;
             hipsFromEyeTposeXZ = new float3(pHips.x - pEye.x, 0f, pHips.z - pEye.z);
             headFromEyeTposeXZ = new float3(pHead.x - pEye.x, 0f, pHead.z - pEye.z);
             yawPivotFromEyeTposeXZ = new float3(pNeck.x - pEye.x, 0f, pNeck.z - pEye.z);

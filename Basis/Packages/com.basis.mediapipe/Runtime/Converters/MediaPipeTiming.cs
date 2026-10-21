@@ -29,15 +29,5 @@ namespace Basis.MediaPipe
             SampleDelta = Mathf.Clamp(sampleDelta, 1e-3f, 0.5f);
             IsNewSample = isNewSample;
         }
-
-        /// <summary>
-        /// Cutoff for the render-rate pass, in Hz. Its time constant tracks the camera's actual period, so the
-        /// pose is still travelling toward the last sample when the next one arrives — which is what turns a
-        /// staircase back into continuous motion — without lagging further than it has to.
-        /// </summary>
-        public float CarryCutoff => 1f / (2f * Mathf.PI * SampleDelta * CarryPeriods);
-
-        private const float CarryPeriods = 0.7f;
-
     }
 }

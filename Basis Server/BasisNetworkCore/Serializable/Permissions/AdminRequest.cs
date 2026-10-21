@@ -132,8 +132,8 @@ namespace BasisNetworkCore.Serializable
             GlobalGetAvatarScaleLimits, // server→client: min/max avatar eye height in metres. Payload: [float minMeters][float maxMeters]
             SetGlobalAvatarScaleLimits, // admin: set min/max avatar eye height in metres (persisted). Non-admins are clamped to this range; admins bypass it. Payload: [float minMeters][float maxMeters]
 
-            GlobalGetResourceLimits, // server→client: persisted DoS caps. Payload: [int maxContentSpheresPerPlayer]
-            SetGlobalResourceLimits, // admin: set the persisted DoS caps. Payload: [int maxContentSpheresPerPlayer]
+            GlobalGetResourceLimits, // server→client: persisted DoS caps. Payload: [int maxContentSpheresPerPlayer][int contentSphereLeaveTimeoutSeconds][int contentSphereDeletionTimerSeconds]
+            SetGlobalResourceLimits, // admin: set the persisted DoS caps. Payload: [int maxContentSpheresPerPlayer][int contentSphereLeaveTimeoutSeconds][int contentSphereDeletionTimerSeconds]; the two timers are optional, older clients send only the cap
 
             // admin: toggle the global Cilbox lock. While set, every client blocks sandboxed Cilbox
             // code on avatars from running (props/worlds keep their own). State is appended in
@@ -290,6 +290,29 @@ namespace BasisNetworkCore.Serializable
             // Payload: [ushort targetPlayerId]
             EnableShoutMode,
             DisableShoutMode,   // admin: take a player back out of shout mode
+
+            // admin: set the instance-wide locomotion policy — the jump height, walk/run speed,
+            // gravity and movement mode every player in this instance runs with. Unlike
+            // SetLocomotionOverrideAll, which is a one-shot fan-out to whoever happens to be
+            // connected, this is persisted to config.xml, seeded at boot and pushed to every
+            // client as it joins, so late joiners land on it too. Clients apply it under a
+            // reserved key that world content can neither clear nor outrank, ranked just below
+            // a moderator's own override so one player can still be adjusted past the policy.
+            // Payload: [byte fields][float jumpHeight][float walkSpeed][float runSpeed]
+            //          [float gravity][byte mode]
+            // fields is a bitmask: 1 jumpHeight, 2 walkSpeed, 4 runSpeed, 8 gravity, 16 mode.
+            // fields == 0 means no policy — every player keeps their own values.
+            // mode: 0 = Walk, 1 = Fly, 2 = NoClip.
+            SetGlobalLocomotionPolicy,
+            // server→client: the current instance-wide locomotion policy, same field order as
+            // SetGlobalLocomotionPolicy. Sent on join and on every admin change.
+            GlobalGetLocomotionPolicy,
+            GlobalToggleGifs,
+            RenamePlayer,
+            GetMuteState,    // moderator: one player's current moderation mute flags. Payload: [string uuid]
+            MuteStateResult, // server→moderator: answer to GetMuteState, also echoed after SetVoiceMute/SetTextMute. Payload: [string uuid][bool voiceMuted][bool textMuted]
+            GlobalToggleContentRemoval,
+            GlobalToggleExternalLinks,
         }
 
         /// <summary>

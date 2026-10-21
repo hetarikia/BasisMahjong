@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.IO;
 using System.Threading;
@@ -5,7 +6,8 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 
-public static class BasisIOManagement
+[AutoStaticsCleanup]
+public static partial class BasisIOManagement
 {
     public static string PersistentDataPath { get; private set; }
     public static RuntimePlatform CachedPlatform { get; private set; }
@@ -77,6 +79,7 @@ public static class BasisIOManagement
             nameof(RuntimePlatform.OSXPlayer) => "StandaloneOSX",
             nameof(RuntimePlatform.Android) => "Android",
             nameof(RuntimePlatform.IPhonePlayer) => "iOS",
+            nameof(RuntimePlatform.WebGLPlayer) => "WebGL",
             _ => normalized,
         };
     }
@@ -249,7 +252,8 @@ public static class BasisIOManagement
             return BeeResult<BeeDownloadResult>.Fail("DownloadBEEEx: VP is null or empty.");
 
         // 1) Read 8-byte remote header (Int64)
-        var headerRes = await DownloadRangeInternal(url, startByte: 0, endByteInclusive: BasisBeeConstants.RemoteHeaderSize - 1, toFilePath: null, progressCallback, cancellationToken, MaxDownloadSizeInMB);
+        string progressKey = BasisGenerateUniqueID.GenerateUniqueID();
+        var headerRes = await DownloadRangeInternal(url, startByte: 0, endByteInclusive: BasisBeeConstants.RemoteHeaderSize - 1, toFilePath: null, progressCallback?.Stage(progressKey, 0, 1), cancellationToken, MaxDownloadSizeInMB);
 
         if (!headerRes.IsSuccess || headerRes.Value?.Data == null)
             return BeeResult<BeeDownloadResult>.Fail($"DownloadBEEEx: Failed to read remote header. {headerRes.Error ?? "No data"}", headerRes.ResponseCode);
@@ -272,7 +276,7 @@ public static class BasisIOManagement
         long connectorStart = BasisBeeConstants.RemoteHeaderSize;
         long connectorEndInclusive = BasisBeeConstants.RemoteHeaderSize + connectorLength - 1;
 
-        var connectorRes = await DownloadRangeInternal(url, connectorStart, connectorEndInclusive, toFilePath: null, progressCallback, cancellationToken, MaxDownloadSizeInMB);
+        var connectorRes = await DownloadRangeInternal(url, connectorStart, connectorEndInclusive, toFilePath: null, progressCallback?.Stage(progressKey, 1, 2), cancellationToken, MaxDownloadSizeInMB);
 
         if (!connectorRes.IsSuccess || connectorRes.Value.Data == null)
             return BeeResult<BeeDownloadResult>.Fail($"DownloadBEEEx: Failed to download connector block. {connectorRes.Error ?? "No data"}", connectorRes.ResponseCode);
@@ -284,7 +288,7 @@ public static class BasisIOManagement
         BasisDebug.Log("Downloaded Connector block size: " + connectorBytes.Length);
 
         // 3) Parse connector
-        BasisBundleConnector connector = await BasisEncryptionToData.GenerateMetaFromBytes(vp, connectorBytes, progressCallback);
+        BasisBundleConnector connector = await BasisEncryptionToData.GenerateMetaFromBytes(vp, connectorBytes, progressCallback?.Stage(progressKey, 2, 3));
 
         if (connector == null)
             return BeeResult<BeeDownloadResult>.Fail("DownloadBEEEx: Failed to parse connector metadata (null).");
@@ -338,7 +342,7 @@ public static class BasisIOManagement
             if (isPlatform)
             {
                 BasisDebug.Log($"Downloading platform section range {start}-{end}");
-                var sectRes = await DownloadRangeInternal(url, start, end, toFilePath: null, progressCallback, cancellationToken, MaxDownloadSizeInMB);
+                var sectRes = await DownloadRangeInternal(url, start, end, toFilePath: null, progressCallback?.Stage(progressKey, 3, 100), cancellationToken, MaxDownloadSizeInMB);
 
                 if (!sectRes.IsSuccess || sectRes.Value?.Data == null)
                     return BeeResult<BeeDownloadResult>.Fail($"DownloadBEEEx: Failed to download platform section at index {index}. {sectRes.Error ?? "No data"}", sectRes.ResponseCode);
@@ -363,7 +367,7 @@ public static class BasisIOManagement
         if ((platformSectionData == null || platformSectionData.Length == 0) && genericStart >= 0)
         {
             BasisDebug.Log($"No section for {Application.platform}; falling back to Generic (glTF) section range {genericStart}-{genericStart + genericLength - 1}");
-            var genericRes = await DownloadRangeInternal(url, genericStart, genericStart + genericLength - 1, toFilePath: null, progressCallback, cancellationToken, MaxDownloadSizeInMB);
+            var genericRes = await DownloadRangeInternal(url, genericStart, genericStart + genericLength - 1, toFilePath: null, progressCallback?.Stage(progressKey, 3, 100), cancellationToken, MaxDownloadSizeInMB);
 
             if (!genericRes.IsSuccess || genericRes.Value?.Data == null)
                 return BeeResult<BeeDownloadResult>.Fail($"DownloadBEEEx: Failed to download generic section at index {genericIndex}. {genericRes.Error ?? "No data"}", genericRes.ResponseCode);
@@ -496,7 +500,7 @@ public static class BasisIOManagement
             return BeeResult<BeeReadResult>.Fail("ReadBEEFileEx: VP is null or empty.");
         }
 
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: true);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: BasisTasks.ThreadsAvailable);
 
         if (fs.Length < BasisBeeConstants.DiskHeaderSize)
         {
@@ -567,7 +571,7 @@ public static class BasisIOManagement
         if (string.IsNullOrWhiteSpace(vp))
             return BeeResult<BeeReadResult>.Fail("ReadBEEFileEx: VP is null or empty.");
 
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: true);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: BasisTasks.ThreadsAvailable);
 
         if (fs.Length < BasisBeeConstants.DiskHeaderSize)
             return BeeResult<BeeReadResult>.Fail($"ReadBEEFileEx: File too small to contain header. Size={fs.Length} bytes.");
@@ -612,7 +616,7 @@ public static class BasisIOManagement
         if (string.IsNullOrWhiteSpace(vp))
             return BeeResult<BeeReadResult>.Fail("ReadRemoteBeeFromDiskEx: VP is null or empty.");
 
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: true);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 96 * 1024, useAsync: BasisTasks.ThreadsAvailable);
 
         if (fs.Length < BasisBeeConstants.RemoteHeaderSize)
             return BeeResult<BeeReadResult>.Fail($"ReadRemoteBeeFromDiskEx: File too small to contain remote header. Size={fs.Length} bytes.");
@@ -984,14 +988,14 @@ public static class BasisIOManagement
         string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, buffer, useAsync: true))
+            using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, buffer, useAsync: BasisTasks.ThreadsAvailable))
             {
-                await fs.WriteAsync(sizeLE, 0, sizeLE.Length).ConfigureAwait(false);
-                await fs.WriteAsync(connectorBytes, 0, connectorBytes.Length).ConfigureAwait(false);
+                await WriteChunkAsync(fs, sizeLE).ConfigureAwait(false);
+                await WriteChunkAsync(fs, connectorBytes).ConfigureAwait(false);
 
                 if (writeSection)
                 {
-                    await fs.WriteAsync(sectionBytes, 0, sectionBytes.Length).ConfigureAwait(false);
+                    await WriteChunkAsync(fs, sectionBytes).ConfigureAwait(false);
                 }
             }
 
@@ -1169,6 +1173,13 @@ public static class BasisIOManagement
         return false;
     }
 
+    private static Task WriteChunkAsync(FileStream fs, byte[] bytes)
+    {
+        if (BasisTasks.ThreadsAvailable) return fs.WriteAsync(bytes, 0, bytes.Length);
+        fs.Write(bytes, 0, bytes.Length);
+        return Task.CompletedTask;
+    }
+
     private static async Task<byte[]> ReadExactAsync(Stream s, int size, CancellationToken ct)
     {
         if (s == null) throw new ArgumentNullException(nameof(s));
@@ -1179,7 +1190,7 @@ public static class BasisIOManagement
 
         while (read < size)
         {
-            int n = await s.ReadAsync(buf, read, size - read, ct);
+            int n = BasisTasks.ThreadsAvailable ? await s.ReadAsync(buf, read, size - read, ct) : s.Read(buf, read, size - read);
             if (n <= 0) break;
             read += n;
         }

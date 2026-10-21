@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 #if UNITY_EDITOR
 using System.Collections.Generic;
 
@@ -61,6 +62,7 @@ namespace Basis.Shims.Editor
     /// of that box at draw time through <see cref="CilboxApiEntry.AvailableIn"/>, so an entry cannot
     /// keep claiming a capability after the whitelist behind it is edited away.</para>
     /// </summary>
+    [NoAutoStaticsCleanup]
     internal static class BasisCilboxApiCatalog
     {
         public const string GroupLifecycle = "sdk.cilbox.group.lifecycle";
@@ -198,11 +200,12 @@ foreach (IBasisPlayer player in BasisPlayersShim.Within(transform.position, 5f))
 bool isLocal = player.IsLocal;
 string name = player.DisplayName;
 string safe = player.SafeDisplayName;
+string uuid = player.UUID; // the same on every visit and server
 bool fallback = player.IsConsideredFallBackAvatar;
+IBasisPlayer again = BasisPlayersShim.GetByUUID(uuid);
 
-// Blocked on purpose: get_AvatarTransform, get_GameObject, get_UUID and every
-// setter. A Transform is an unrestricted write handle once handed over, and UUID
-// is stable across visits, so it would let a world correlate people between them.
+// Blocked on purpose: get_AvatarTransform, get_GameObject and every setter.
+// A Transform is an unrestricted write handle once handed over.
 // Poses come from BasisPlayersShim as copied vectors instead.",
             },
             new CilboxApiEntry
@@ -247,6 +250,43 @@ input.SetLocomotion(BasisPlayerInputBlend.Additive,
 
 input.SetVerticalDelta(BasisPlayerInputBlend.Additive, 0.25f);
 input.Clear();",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupPlayers,
+                TitleKey = "sdk.cilbox.api.platform.title",
+                SummaryKey = "sdk.cilbox.api.platform.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisPlatformShim", "IsDetected"), new CilboxApiRequirement("Basis.Shims.BasisPlatformEventShim", "Rebind"), new CilboxApiRequirement("BasisPlatformSwitch", "Apply") },
+                Example =
+@"using Basis.Shims;
+using Basis.Scripts.Device_Management;
+
+bool vr = BasisPlatformShim.IsVR;
+bool mobile = BasisPlatformShim.IsMobileGpu;
+bool quest = vr && BasisPlatformShim.IsDetected(""Android"");
+string mode = BasisPlatformShim.CurrentMode;
+
+// BasisPlatformSwitch (com.basis.examples) does the same without code: each rule
+// names a condition and the objects and components to enable or disable while it
+// holds. A script can read or rewrite the rules and re-apply them.
+public BasisPlatformSwitch platformSwitch;
+
+// Adding the event component is the opt-in. The callback is found by name on
+// your own script, fires once on opt-in and again whenever the player swaps
+// between VR and desktop or takes the headset off.
+void Start()
+{
+    BasisPlatformSwitchRule rule = platformSwitch.Rules[0];
+    rule.When = BasisPlatformCondition.VR;
+    platformSwitch.Apply();
+    GetComponent<BasisPlatformEventShim>();
+}
+
+void OnPlatformChanged(string mode, bool vr, bool headsetWorn)
+{
+    vrOnlyControls.SetActive(vr);
+    desktopHud.SetActive(!vr);
+}",
             },
 
             // ---------------------------------------------------------- avatar
@@ -402,6 +442,25 @@ var sync = GetComponent<BasisTransformSyncShim>();
 sync.Channels = BasisTransformSyncShim.ChannelPose;
 sync.Space = BasisTransformSyncShim.SpaceWorld;
 sync.Enabled = true;",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupNetworking,
+                TitleKey = "sdk.cilbox.api.compression.title",
+                SummaryKey = "sdk.cilbox.api.compression.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisCompressionShim", "Compress"), new CilboxApiRequirement("Basis.Shims.BasisCompressionShim", "Decompress") },
+                Example =
+@"using Basis.Shims;
+
+// LZ4 on the host. Data that does not shrink is sent as is, plus one byte.
+net.SendCustomNetworkEvent(BasisCompressionShim.Compress(state), DeliveryMethod.ReliableOrdered);
+
+void OnMessage(ushort sender, byte[] buffer, DeliveryMethod method)
+{
+    // Anything malformed, or bigger than MaxLength (1 MB) once unpacked, is null.
+    byte[] state = BasisCompressionShim.Decompress(buffer);
+    if (state == null) return;
+}",
             },
 
             // ---------------------------------------------------------- objects
@@ -560,6 +619,40 @@ AsyncGPUReadback.Request(renderTexture, 0, request =>
             new CilboxApiEntry
             {
                 GroupKey = GroupRendering,
+                TitleKey = "sdk.cilbox.api.compute.title",
+                SummaryKey = "sdk.cilbox.api.compute.summary",
+                Requires = new[] { new CilboxApiRequirement("UnityEngine.ComputeShader", "Dispatch"), new CilboxApiRequirement("UnityEngine.ComputeBuffer", ".ctor") },
+                Example =
+@"using Basis.Shims;
+
+public ComputeShader shader;
+ComputeBuffer heights;
+int kernel;
+
+void Start()
+{
+    if (!BasisComputeShim.IsSupported) return;
+    kernel = shader.FindKernel(""Step"");
+    heights = new ComputeBuffer(256 * 256, 4);
+    shader.SetBuffer(kernel, ""Heights"", heights);
+    material.SetBuffer(""Heights"", heights);
+}
+
+void Update()
+{
+    shader.SetFloat(""Time"", Time.time);
+    shader.Dispatch(kernel, 256 / 8, 256 / 8, 1); // [numthreads(8,8,1)]
+}
+
+// Each world, prop and avatar has a memory and a per-frame thread budget:
+// BasisComputeShim.RemainingBytes(this) and RemainingThreads(this). A buffer over
+// the memory budget throws; a Dispatch over this frame's budget is skipped with a
+// warning. Basis frees every buffer when the content unloads.
+// Not available: DispatchIndirect, SetTextureFromGlobal, Shader.SetGlobalBuffer.",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupRendering,
                 TitleKey = "sdk.cilbox.api.light.title",
                 SummaryKey = "sdk.cilbox.api.light.summary",
                 Requires = new[] { new CilboxApiRequirement("UnityEngine.Light", "set_intensity") },
@@ -586,6 +679,65 @@ float fov = main.fieldOfView;
 
 // Queries and property accessors only. Render(), CopyFrom(), SetTargetBuffers()
 // and the command-buffer methods are blocked.",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupRendering,
+                TitleKey = "sdk.cilbox.api.graphicssettings.title",
+                SummaryKey = "sdk.cilbox.api.graphicssettings.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisGraphicsSettingsShim", "Get") },
+                Example =
+@"using Basis.Shims;
+
+// Tiers are ordinals over BasisGraphicsSettingsShim.Tiers, cheapest first, so a
+// world compares numbers instead of spelling ""Very Low"" correctly.
+bool cheap = BasisGraphicsSettingsShim.QualityTier <= BasisGraphicsSettingsShim.TierLow;
+backgroundDonut.SetActive(!cheap);
+RenderSettings.skybox = cheap ? flatSky : cloudSky;
+
+// Anything else on ReadableKeys, by key.
+float scale = BasisGraphicsSettingsShim.RenderResolution;
+bool gi = BasisGraphicsSettingsShim.GetFlag(""useglobalillumination"", false);
+
+// Adding the event component is the opt-in. The callback is found by name on
+// your own script, fires once on opt-in as well as on every later change, and
+// is coalesced to one call per frame so a Performance Mode batch is one event.
+void Start() { GetComponent<BasisGraphicsSettingsEventShim>(); }
+
+void OnGraphicsSettingsChanged(string qualityLevel, int qualityTier) { }",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupRendering,
+                TitleKey = "sdk.cilbox.api.stats.title",
+                SummaryKey = "sdk.cilbox.api.stats.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisStatsShim", "get_FramesPerSecond") },
+                Example =
+@"using Basis.Shims;
+
+// The frame rate the player's own menu shows. Basis measures only while a
+// script keeps reading, and stops a few seconds after the last read, so poll
+// it from Update or a timer rather than once in Start.
+float fps = BasisStatsShim.FramesPerSecond;
+float ms = BasisStatsShim.FrameTimeMs;
+
+// The refresh rate or frame cap the client is paced to, 0 when uncapped.
+float target = BasisStatsShim.TargetFramesPerSecond;
+bool struggling = target > 0f && fps < target * 0.8f;
+
+// Which side is holding the frame back, so a world cuts the right thing.
+int bottleneck = BasisStatsShim.Bottleneck;
+if (bottleneck == BasisStatsShim.BottleneckGpu) mirror.SetActive(false);
+if (bottleneck == BasisStatsShim.BottleneckCpu) crowd.SetActive(false);
+float cpuMs = BasisStatsShim.CpuFrameTimeMs;
+float gpuMs = BasisStatsShim.GpuFrameTimeMs;
+
+// The connection. Round trip and packet age are -1 while not connected,
+// the player limit is 0 when the server sets none.
+bool online = BasisStatsShim.IsConnected;
+int rtt = BasisStatsShim.RoundTripTimeMs;
+bool stalled = BasisStatsShim.SecondsSinceLastPacket > 2f;
+int limit = BasisStatsShim.PlayerLimit;",
             },
             new CilboxApiEntry
             {
@@ -670,6 +822,117 @@ void OnDestroy()
 if (seat.IsAvailable) seat.TrySeatLocalPlayer();
 if (seat.IsLocalPlayerSeated) seat.SetOccupantYaw(90f);
 seat.EjectLocalPlayer();",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupInteraction,
+                TitleKey = "sdk.cilbox.api.haptics.title",
+                SummaryKey = "sdk.cilbox.api.haptics.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisHapticsShim", "Play") },
+                Example =
+@"using Basis.Shims;
+
+// Buzzes the local player's controllers only. Strength 0..1, at most 1 s,
+// 10 pulses a second per content. Avatars only reach the player wearing them.
+// Returns false when nothing played, including when the player has UI Haptics off.
+BasisHapticsShim.Play(this, BasisHapticHand.Right);
+BasisHapticsShim.Play(this, BasisHapticHand.Both, 0.8f, 0.2f);",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupInteraction,
+                TitleKey = "sdk.cilbox.api.controllerInput.title",
+                SummaryKey = "sdk.cilbox.api.controllerInput.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisControllerInputShim", "GetButtonDown") },
+                Example =
+@"using Basis.Shims;
+
+// Worlds only. Reads the same hand state that drives the player, so device overrides
+// apply. Everything reads released while the menu is open or a pointer is over UI.
+void Update()
+{
+    if (!BasisControllerInputShim.IsAvailable(BasisControllerHand.Right)) return; // desktop
+
+    if (BasisControllerInputShim.GetButtonDown(BasisControllerHand.Right, BasisControllerButton.Trigger))
+        Fire();
+
+    float squeeze = BasisControllerInputShim.GetTrigger(BasisControllerHand.Left);
+    Vector2 stick = BasisControllerInputShim.GetStick(BasisControllerHand.Left);
+    bool gripping = BasisControllerInputShim.GetButton(BasisControllerHand.Left, BasisControllerButton.Grip);
+}",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupAudio,
+                TitleKey = "sdk.cilbox.api.audioRouting.title",
+                SummaryKey = "sdk.cilbox.api.audioRouting.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisAudioRoutingShim", "Route") },
+                Example =
+@"using Basis.Shims;
+
+// Sources present at load are already routed. Call this for ones you add or
+// instantiate later, so the player's World / Props / Avatars volume applies.
+AudioSource source = gameObject.AddComponent<AudioSource>();
+BasisAudioRoutingShim.Route(this, source);
+
+// Or route every source in this content at once.
+int routed = BasisAudioRoutingShim.RouteAll(this);",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupPlayers,
+                TitleKey = "sdk.cilbox.api.languageEvent.title",
+                SummaryKey = "sdk.cilbox.api.languageEvent.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisLanguageEventShim", "Rebind") },
+                Example =
+@"using Basis.Shims;
+
+// Adding the event component is the opt-in. The callback is found by name on your
+// own script, fires once on opt-in and again whenever the player changes language.
+void Start()
+{
+    GetComponent<BasisLanguageEventShim>();
+}
+
+void OnLanguageChanged(string code)
+{
+    sign.text = code == ""ja"" ? ""ようこそ"" : ""Welcome"";
+}",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupNetworking,
+                TitleKey = "sdk.cilbox.api.sharedRandom.title",
+                SummaryKey = "sdk.cilbox.api.sharedRandom.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisSharedRandomShim", "Value") },
+                Example =
+@"using Basis.Shims;
+
+// Same seed and index give the same number on every client, no message needed.
+float roll = BasisSharedRandomShim.Value(42, round);
+int card = BasisSharedRandomShim.RangeInt(42, round, 0, 52);
+
+// Or let the server clock pick the index: everyone gets the same weather
+// for each 5 minute window.
+int weather = BasisSharedRandomShim.NowRangeInt(7, 300d, 0, 4);",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupInteraction,
+                TitleKey = "sdk.cilbox.api.externalLink.title",
+                SummaryKey = "sdk.cilbox.api.externalLink.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisExternalLinkShim", "Open") },
+                Example =
+@"using Basis.Shims;
+
+// Call it from the player's own press, grab or click on this world or prop.
+void OnWebsiteButtonPressed()
+{
+    BasisExternalLinkShim.Open(this, ""https://example.com/community"", result =>
+    {
+        if (result != BasisExternalLinkResult.Opened) addressLabel.text = ""example.com/community"";
+    });
+}",
             },
             new CilboxApiEntry
             {
@@ -824,6 +1087,30 @@ downloader.DownloadString(""https://example.github.io/questions.json"", result =
             new CilboxApiEntry
             {
                 GroupKey = GroupData,
+                TitleKey = "sdk.cilbox.api.webRequests.title",
+                SummaryKey = "sdk.cilbox.api.webRequests.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisWebRequestShim", "Get"), new CilboxApiRequirement("Basis.Shims.BasisWebRequestShim", "Post") },
+                Example =
+@"using Basis.Shims;
+
+// Pass this so Basis knows which content is asking. The player approves the
+// script, then each site on first contact; until then you get NotAllowed or
+// Declined and the rest of the script runs. Worlds and props only.
+BasisWebRequestShim.GetText(this, ""https://api.example.com/scores"", (result, status, text) =>
+{
+    if (result == BasisWebResult.Ok) ShowScores(text);
+});
+
+string json = ""{\""score\"":42}"";
+BasisWebRequestShim.PostText(this, ""https://api.example.com/scores"", json, BasisWebRequestShim.Json, (result, status, reply) => { });
+
+// https on the default port, host names only, nothing on the local network.
+// Redirects may only stay on the same host. 256 KB up, 4 MB down, 15 s,
+// 4 at a time and 30 a minute per content. No cookies are kept.",
+            },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupData,
                 TitleKey = "sdk.cilbox.api.json.title",
                 SummaryKey = "sdk.cilbox.api.json.summary",
                 Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisJson", "Parse") },
@@ -844,6 +1131,27 @@ for (int i = 0; i < count; i++)
     int correct = question.GetInt(""correct"", 0);
 }",
             },
+            new CilboxApiEntry
+            {
+                GroupKey = GroupData,
+                TitleKey = "sdk.cilbox.api.saves.title",
+                SummaryKey = "sdk.cilbox.api.saves.summary",
+                Requires = new[] { new CilboxApiRequirement("Basis.Shims.BasisSaveShim", "Save"), new CilboxApiRequirement("Basis.Shims.BasisSaveShim", "Load") },
+                Example =
+@"using Basis.Shims;
+
+// Pass this so Basis knows which content is asking. Until the player agrees,
+// Save returns false and Load returns null, and the rest of the script runs.
+bool saved = BasisSaveShim.Save(this, ""progress"", bytes);
+byte[] loaded = BasisSaveShim.Load(this, ""progress"");
+BasisSaveShim.Delete(this, ""progress"");
+
+// Saves are filed under the Content ID. Name a store to share them, for
+// example between a world and its props.
+BasisSaveShim.Save(this, ""my-game"", ""progress"", bytes);
+
+// 256 KB per slot, 32 slots and 1 MB per store, 8 writes a second.",
+            },
             // ---------------------------------------------------------- media
             new CilboxApiEntry
             {
@@ -863,7 +1171,7 @@ void Update()
     }
 }
 
-// LoadUrl, Play, Stop, Seek and CaptureScreenshot are blocked, so a scene cannot
+// Open, LoadUrl, Play, Pause, Seek and Stop are blocked, so a scene cannot
 // step around the video URL trust prompt.",
             },
             new CilboxApiEntry

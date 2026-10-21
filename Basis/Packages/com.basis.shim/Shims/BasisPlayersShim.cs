@@ -1,3 +1,4 @@
+using Unity.Scripting.LifecycleManagement;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -25,7 +26,8 @@ namespace Basis.Shims
 	///         Spawn( p.GetBonePosition( HumanBodyBones.Head ) );
 	/// </code>
 	/// </summary>
-	public static class BasisPlayersShim
+	[AutoStaticsCleanup]
+	public static partial class BasisPlayersShim
 	{
 		private static IBasisPlayer[] cached = Array.Empty<IBasisPlayer>();
 		private static ushort[] cachedIds = Array.Empty<ushort>();
@@ -85,6 +87,16 @@ namespace Basis.Shims
 			return null;
 		}
 
+		/// <summary>The player with this UUID, or null. UUIDs stay the same across visits and servers.</summary>
+		public static IBasisPlayer GetByUUID( string uuid )
+		{
+			if( string.IsNullOrEmpty( uuid ) ) return null;
+			Rebuild();
+			for( int i = 0; i < cached.Length; i++ )
+				if( string.Equals( cached[i].UUID, uuid, StringComparison.Ordinal ) ) return cached[i];
+			return null;
+		}
+
 		/// <summary>How many players reported the given platform string, compared case-insensitively.</summary>
 		public static int CountOnPlatform( string platform )
 		{
@@ -132,11 +144,22 @@ namespace Basis.Shims
 		/// <summary>Network id for this player, stable for their connection. 0 if they are gone.</summary>
 		public static ushort GetPlayerId( this IBasisPlayer player )
 		{
-			if( !Alive( player ) ) return 0;
+			return TryGetPlayerId( player, out ushort playerId ) ? playerId : (ushort)0;
+		}
+
+		/// <summary>Network id for this player. False when they are gone; id 0 is a real player, never a blank.</summary>
+		public static bool TryGetPlayerId( this IBasisPlayer player, out ushort playerId )
+		{
+			playerId = 0;
+			if( !Alive( player ) ) return false;
 			Rebuild();
 			for( int i = 0; i < cached.Length; i++ )
-				if( ReferenceEquals( cached[i], player ) ) return cachedIds[i];
-			return 0;
+			{
+				if( !ReferenceEquals( cached[i], player ) ) continue;
+				playerId = cachedIds[i];
+				return true;
+			}
+			return false;
 		}
 
 		/// <summary>True once the avatar exists and has finished setting up. Bone reads return zero until then.</summary>
