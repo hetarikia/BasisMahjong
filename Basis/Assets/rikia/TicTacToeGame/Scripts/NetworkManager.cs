@@ -11,15 +11,11 @@ namespace rikia
 		private const byte MessageSlotClick = 1;
 
 		private BasisNetworkShim net;
+		private GameManager gameManager;
 
-		// Start is called once before the first execution of Update after the MonoBehaviour is created
-		void Start() { }
-
-		// Update is called once per frame
-		void Update() { }
-
-		public void _Init()
+		public void _Init(GameManager gameManager)
 		{
+			this.gameManager = gameManager;
 			net = SafeUtil.MakeNetworkable(this);
 			if (net != null)
 			{
@@ -31,13 +27,29 @@ namespace rikia
 			}
 		}
 
-		public void OnSlotClick(int idx) { }
+		public void OnSlotClick(int idx)
+		{
+			net.TakeOwnership();
+			net.SendCustomNetworkEvent(
+				new byte[] { MessageSlotClick, (byte)idx },
+				DeliveryMethod.ReliableOrdered
+			);
+		}
 
 		private void OnNetworkMessage(
 			ushort PlayerID,
 			byte[] buffer,
 			DeliveryMethod DeliveryMethod
-		) { }
+		)
+		{
+			if (buffer == null || buffer.Length == 0)
+				return;
+			byte Prefix = buffer[0];
+			if (Prefix == MessageSlotClick)
+			{
+				gameManager.toggleSlot(buffer[1]);
+			}
+		}
 
 		private void sendToAll(byte[] buffer)
 		{
