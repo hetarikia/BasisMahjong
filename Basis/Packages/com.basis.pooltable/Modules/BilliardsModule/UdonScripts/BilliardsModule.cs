@@ -1178,6 +1178,7 @@ public class BilliardsModule : MonoBehaviour
 
 	#region NetworkingClient
 	// the order is important, unfortunately
+	// #NOTE syncing from network state happens here
 	public void _OnRemoteDeserialization()
 	{
 		_LogInfo(

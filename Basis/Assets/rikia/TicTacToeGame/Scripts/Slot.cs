@@ -25,7 +25,7 @@ namespace rikia
 
 		public void OnInteractStart(BasisInput Input)
 		{
-			gameManager.sendToggleSlotState(idx);
+			gameManager.TriggerToggleSlotState(idx);
 		}
 	}
 }
